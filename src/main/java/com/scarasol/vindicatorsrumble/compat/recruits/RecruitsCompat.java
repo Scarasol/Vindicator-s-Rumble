@@ -1,5 +1,7 @@
 package com.scarasol.vindicatorsrumble.compat.recruits;
 
+import com.scarasol.vindicatorsrumble.api.vehicle.DriveRequest;
+import com.scarasol.vindicatorsrumble.api.vehicle.VehicleController;
 import com.scarasol.vindicatorsrumble.compat.VehicleControllers;
 import com.scarasol.vindicatorsrumble.config.CommonConfig;
 import com.scarasol.vindicatorsrumble.init.ModTags;
@@ -41,6 +43,58 @@ public final class RecruitsCompat {
 
     public static boolean isPlayerAlly(Entity entity, Player player, boolean strict) {
         return entity instanceof AbstractRecruitEntity recruit && (!strict || recruit.isOwnedBy(player));
+    }
+
+    public static boolean usesVehicleNavigation(AbstractRecruitEntity recruit) {
+        return CommonConfig.ENABLE_VEHICLE_AI.get()
+                && recruit.getType().is(ModTags.EntityTypes.VEHICLE_AI_USERS)
+                && VehicleControllers.forMob(recruit)
+                .filter(controller -> controller.isValid()
+                        && (controller.usesGroundNavigation() || controller.supportsFlightControl())).isPresent();
+    }
+
+    public static void updateNavigation(Mob mob) {
+        if (!(mob instanceof AbstractRecruitEntity recruit) || recruit.level().isClientSide()
+                || !usesVehicleNavigation(recruit)) {
+            return;
+        }
+        VehicleController controller = VehicleControllers.forMob(recruit).orElseThrow();
+        DriveRequest request = DriveRequest.NONE;
+        if (controller.canDrive(recruit) && recruit.isOwned() && !recruit.getFleeing()
+                && !recruit.needsToGetFood() && !recruit.getShouldMount()) {
+            if (recruit.getShouldMovePos() && recruit.getMovePos() != null) {
+                Vec3 destination = Vec3.atBottomCenterOf(recruit.getMovePos());
+                request = DriveRequest.moveTo(destination);
+                if (!VehicleAiTuning.isValidVehicleDriveTarget(recruit, recruit.getTarget())
+                        && horizontalDistanceSqr(controller.position(), destination)
+                        <= request.desiredDistance() * request.desiredDistance()
+                        && controller.velocity().multiply(1.0D, 0.0D, 1.0D).lengthSqr() < 0.0064D) {
+                    recruit.setShouldMovePos(false);
+                    recruit.clearMovePos();
+                    recruit.reachedMovePos = true;
+                    request = DriveRequest.NONE;
+                }
+            } else if (recruit.getShouldHoldPos() && recruit.getHoldPos() != null) {
+                request = DriveRequest.moveTo(recruit.getHoldPos());
+            } else if (recruit.getShouldFollow() && recruit.getFollowState() == 1) {
+                Player owner = recruit.getOwner();
+                if (owner != null && owner.isAlive() && !owner.isSpectator()
+                        && owner.level() == recruit.level() && owner.getRootVehicle() != recruit.getRootVehicle()) {
+                    request = DriveRequest.moveTo(owner, null);
+                }
+            }
+        }
+        if (request == DriveRequest.NONE) {
+            VehicleAiMemory.clearNavigationDriveRequest(recruit);
+        } else {
+            VehicleAiMemory.setNavigationDriveRequest(recruit, request);
+        }
+    }
+
+    private static double horizontalDistanceSqr(Vec3 first, Vec3 second) {
+        double dx = first.x - second.x;
+        double dz = first.z - second.z;
+        return dx * dx + dz * dz;
     }
 
     public static void onStrategicFireCommand(Player player, UUID owner, AbstractRecruitEntity recruit,

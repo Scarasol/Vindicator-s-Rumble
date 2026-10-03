@@ -3,6 +3,8 @@ package com.scarasol.vindicatorsrumble.entity.goal.vehicle.drive.helicopter;
 import com.scarasol.vindicatorsrumble.api.vehicle.VehicleController;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.Vec3;
 
 import javax.annotation.Nullable;
@@ -125,6 +127,32 @@ public final class HelicopterFlightPlanner {
     static Plan idlePlan(AircraftState state, double desiredY) {
         Vec3 desiredPosition = new Vec3(state.position().x, desiredY, state.position().z);
         return plan(desiredPosition, levelForwardAim(state, desiredY), 0.0D, true, false, Phase.IDLE);
+    }
+
+    Plan navigationPlan(VehicleController controller, AircraftState state, Vec3 destination,
+                        double hoverHeight, double arrivalDistance, HelicopterEnvironment environment) {
+        if (!controller.level().hasChunkAt(BlockPos.containing(destination))) {
+            return idlePlan(state, desiredY(state, null, hoverHeight, environment));
+        }
+        double groundY = controller.level().getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,
+                Mth.floor(destination.x), Mth.floor(destination.z));
+        double desiredY = Math.max(groundY + hoverHeight, desiredY(state, null, hoverHeight, environment));
+        double stoppingDistance = controller.estimatedStabilizedHorizontalStoppingDistance();
+        boolean obstruction = environment.frontClearance() < HelicopterEnvironmentProbe.RAY_RANGE;
+        boolean blocked = state.altitude() < SAFE_ALTITUDE || environment.frontBlocked()
+                || obstruction && environment.frontClearance() <= stoppingDistance
+                + Math.max(controller.boundingBox().getXsize(), controller.boundingBox().getZsize());
+        if (blocked) {
+            desiredY = Math.max(desiredY, state.position().y + VERTICAL_TOLERANCE * 2.0D);
+            if (obstruction && Double.isFinite(this.environmentProbe.frontObstacleY())) {
+                desiredY = Math.max(desiredY, this.environmentProbe.frontObstacleY() + SAFE_ALTITUDE);
+            }
+        }
+        Vec3 waypoint = new Vec3(destination.x, desiredY, destination.z);
+        boolean arriving = horizontalDistance(state.position(), destination) <= arrivalDistance + stoppingDistance;
+        return plan(waypoint, arriving ? levelForwardAim(state, desiredY) : waypoint,
+                arriving || blocked ? 0.0D : APPROACH_CRUISE_SPEED, true, true,
+                blocked ? Phase.PULL_OUT : arriving ? Phase.COMBAT_HOVER : Phase.APPROACH);
     }
 
     static Plan pullOutPlan(AircraftState state, Vec3 facingPoint, double hoverHeight) {

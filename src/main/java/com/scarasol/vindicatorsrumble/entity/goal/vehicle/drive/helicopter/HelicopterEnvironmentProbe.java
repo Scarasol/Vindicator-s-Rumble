@@ -7,6 +7,7 @@ import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
@@ -19,7 +20,7 @@ final class HelicopterEnvironmentProbe {
     private static final int HOVER_TERRAIN_BUDGET = 3;
     private static final int MOVING_TERRAIN_BUDGET = 4;
     private static final int URGENT_TERRAIN_BUDGET = 5;
-    private static final double RAY_RANGE = 24.0D;
+    static final double RAY_RANGE = 24.0D;
     private static final double FRONT_BLOCKED_DISTANCE = 12.0D;
     private static final double DIRECTION_REALIGN_DOT = 0.965925826D;
     private static final double ELEVATED_RAY_Y_OFFSET = 8.0D;
@@ -51,6 +52,7 @@ final class HelicopterEnvironmentProbe {
     private int rayCursor;
     private double smoothedTerrainPreferredY = Double.NaN;
     private double frontClearance = RAY_RANGE;
+    private double frontObstacleY = Double.NaN;
     private double elevatedFrontClearance = RAY_RANGE;
     private Vec3 sampledMovementDirection;
     private Vec3 terrainSampleDirection;
@@ -62,6 +64,7 @@ final class HelicopterEnvironmentProbe {
         this.rayCursor = 0;
         this.smoothedTerrainPreferredY = Double.NaN;
         this.frontClearance = RAY_RANGE;
+        this.frontObstacleY = Double.NaN;
         this.elevatedFrontClearance = RAY_RANGE;
         this.sampledMovementDirection = null;
         this.terrainSampleDirection = null;
@@ -91,11 +94,10 @@ final class HelicopterEnvironmentProbe {
         this.refreshTerrain(level, state, direction, sampleCount, terrainBudget);
         double terrainPreferredY = this.terrainPreferredY(state, hoverHeight, sampleCount);
 
-        boolean shouldProbeObstacle = target != null
-                && (!hasLineOfSight
+        boolean shouldProbeObstacle = !hasLineOfSight
                 || fastPass(plan)
                 || plan.phase() == HelicopterFlightPlanner.Phase.APPROACH
-                || plan.phase() == HelicopterFlightPlanner.Phase.PULL_OUT);
+                || plan.phase() == HelicopterFlightPlanner.Phase.PULL_OUT;
         if (shouldProbeObstacle) {
             if (this.directionChanged(direction)) {
                 this.refreshForwardRays(level, vehicle, controller.boundingBox(), direction);
@@ -103,6 +105,7 @@ final class HelicopterEnvironmentProbe {
             this.refreshObstacleRays(level, vehicle, controller.boundingBox(), direction, urgent ? 2 : 1);
         } else {
             this.frontClearance = RAY_RANGE;
+            this.frontObstacleY = Double.NaN;
             this.elevatedFrontClearance = RAY_RANGE;
         }
 
@@ -116,6 +119,10 @@ final class HelicopterEnvironmentProbe {
                 terrainPreferredY,
                 this.frontClearance,
                 this.elevatedFrontClearance);
+    }
+
+    double frontObstacleY() {
+        return this.frontObstacleY;
     }
 
     HelicopterEnvironment realignMovement(VehicleController controller,
@@ -201,8 +208,8 @@ final class HelicopterEnvironmentProbe {
     private void refreshObstacleRays(Level level, Entity vehicle, AABB box, Vec3 direction, int budget) {
         for (int i = 0; i < budget; i++) {
             switch (this.rayCursor) {
-                case RAY_FRONT -> this.frontClearance = rayDistance(level, vehicle, rayOrigin(box, 0.0D), direction, RAY_RANGE);
-                case RAY_ELEVATED_FRONT -> this.elevatedFrontClearance = rayDistance(level, vehicle, rayOrigin(box, ELEVATED_RAY_Y_OFFSET), direction, RAY_RANGE);
+                case RAY_FRONT -> this.frontClearance = rayDistance(level, vehicle, rayOrigin(box, 0.0D), direction, true);
+                case RAY_ELEVATED_FRONT -> this.elevatedFrontClearance = rayDistance(level, vehicle, rayOrigin(box, ELEVATED_RAY_Y_OFFSET), direction, false);
                 default -> {
                 }
             }
@@ -211,9 +218,9 @@ final class HelicopterEnvironmentProbe {
     }
 
     private void refreshForwardRays(Level level, Entity vehicle, AABB box, Vec3 direction) {
-        this.frontClearance = rayDistance(level, vehicle, rayOrigin(box, 0.0D), direction, RAY_RANGE);
+        this.frontClearance = rayDistance(level, vehicle, rayOrigin(box, 0.0D), direction, true);
         this.elevatedFrontClearance = rayDistance(level, vehicle,
-                rayOrigin(box, ELEVATED_RAY_Y_OFFSET), direction, RAY_RANGE);
+                rayOrigin(box, ELEVATED_RAY_Y_OFFSET), direction, false);
         this.sampledMovementDirection = direction;
         this.rayCursor = RAY_FRONT;
     }
@@ -232,17 +239,23 @@ final class HelicopterEnvironmentProbe {
                 vehicle));
     }
 
-    private static double rayDistance(Level level, Entity vehicle, Vec3 start, Vec3 direction, double range) {
-        Vec3 end = start.add(direction.scale(range));
+    private double rayDistance(Level level, Entity vehicle, Vec3 start, Vec3 direction, boolean front) {
+        Vec3 end = start.add(direction.scale(RAY_RANGE));
         HitResult hit = level.clip(new ClipContext(
                 start,
                 end,
                 ClipContext.Block.COLLIDER,
                 ClipContext.Fluid.NONE,
                 vehicle));
+        if (front) {
+            this.frontObstacleY = hit.getType() == HitResult.Type.BLOCK
+                    ? level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,
+                    ((BlockHitResult) hit).getBlockPos().getX(), ((BlockHitResult) hit).getBlockPos().getZ())
+                    : Double.NaN;
+        }
         return hit.getType() == HitResult.Type.MISS
-                ? range
-                : Math.min(range, start.distanceTo(hit.getLocation()));
+                ? RAY_RANGE
+                : Math.min(RAY_RANGE, start.distanceTo(hit.getLocation()));
     }
 
     private static Vec3 rayOrigin(AABB box, double yOffset) {

@@ -46,16 +46,14 @@ public final class HelicopterDriveStrategy implements DriveStrategy {
     @Override
     public boolean canUse(VehicleController controller, boolean starting) {
         this.controller = controller;
-        return this.mode == DriveVehicleGoal.Mode.COMBAT
-                && this.isHelicopter(controller)
+        return this.isHelicopter(controller)
                 && this.shouldUseHelicopterDrive(starting);
     }
 
     @Override
     public boolean canContinueToUse(VehicleController controller) {
         this.controller = controller;
-        return this.mode == DriveVehicleGoal.Mode.COMBAT
-                && this.isHelicopter(controller)
+        return this.isHelicopter(controller)
                 && this.shouldUseHelicopterDrive(false);
     }
 
@@ -92,8 +90,10 @@ public final class HelicopterDriveStrategy implements DriveStrategy {
         }
 
         DriveRequest request = this.currentDriveRequest();
+        Vec3 navigationPoint = request.targetPosition().orElseGet(() ->
+                request.targetEntity().filter(Entity::isAlive).map(Entity::position).orElse(null));
         Entity target = this.helicopterTarget(request);
-        if (target == null && !this.helicopterNeedsStabilizing()) {
+        if (target == null && navigationPoint == null && !this.helicopterNeedsStabilizing()) {
             if (this.helicopterFixedAttackActive) {
                 this.finishFixedAttack();
             }
@@ -131,7 +131,11 @@ public final class HelicopterDriveStrategy implements DriveStrategy {
                 environment -> pullOutBlocksRecovery
                         || this.altitudeBlocksVisibilityRecovery(
                         aircraftState, recoveryFloorY, environment),
-                (environment, recoveryWaypoint) -> this.helicopterPlan(
+                (environment, recoveryWaypoint) -> this.mode == DriveVehicleGoal.Mode.NAVIGATION
+                        && navigationPoint != null
+                        ? this.flightPlanner.navigationPlan(controller, aircraftState, navigationPoint, hoverHeight,
+                        request.desiredDistance(), environment)
+                        : this.helicopterPlan(
                         aircraftState,
                         target == null ? -1 : target.getId(),
                         targetPoint,
@@ -189,15 +193,12 @@ public final class HelicopterDriveStrategy implements DriveStrategy {
         if (!this.isHelicopter(this.controller)) {
             return false;
         }
-        DriveRequest request = VehicleAiMemory.getDriveRequest(this.mob);
-        if (this.helicopterTarget(request) != null) {
-            return true;
-        }
-        LivingEntity target = this.validCombatTarget();
-        if (target != null) {
-            return true;
-        }
-        return this.helicopterNeedsStabilizing();
+        boolean combat = this.validCombatTarget() != null
+                || VehicleAiMemory.getDriveRequest(this.mob).targetEntity().filter(Entity::isAlive).isPresent();
+        boolean navigation = VehicleAiMemory.getNavigationDriveRequest(this.mob).intent() == DriveIntent.MOVE_TO;
+        return this.mode == DriveVehicleGoal.Mode.NAVIGATION
+                ? !combat && navigation
+                : combat || !navigation && this.helicopterNeedsStabilizing();
     }
 
     private boolean helicopterNeedsStabilizing() {
@@ -209,6 +210,9 @@ public final class HelicopterDriveStrategy implements DriveStrategy {
     }
 
     private Entity helicopterTarget(DriveRequest request) {
+        if (this.mode == DriveVehicleGoal.Mode.NAVIGATION) {
+            return null;
+        }
         if (request.targetEntity().isPresent() && request.targetEntity().get().isAlive()) {
             return request.targetEntity().get();
         }
@@ -426,6 +430,9 @@ public final class HelicopterDriveStrategy implements DriveStrategy {
     }
 
     private DriveRequest currentDriveRequest() {
+        if (this.mode == DriveVehicleGoal.Mode.NAVIGATION) {
+            return VehicleAiMemory.getNavigationDriveRequest(this.mob);
+        }
         DriveRequest request = VehicleAiMemory.getDriveRequest(this.mob);
         if (request.intent() != DriveIntent.NONE) {
             return request;

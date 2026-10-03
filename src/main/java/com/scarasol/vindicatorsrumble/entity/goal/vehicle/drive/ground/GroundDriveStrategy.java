@@ -1421,6 +1421,9 @@ public final class GroundDriveStrategy implements DriveStrategy {
             return false;
         }
         double minDistance = CommonConfig.VEHICLE_NAVIGATION_MIN_DISTANCE.get();
+        if (request.path().isEmpty()) {
+            minDistance = Math.min(minDistance, request.desiredDistance());
+        }
         if (minDistance <= 0.0D) {
             return true;
         }

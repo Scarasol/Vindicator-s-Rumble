@@ -199,6 +199,7 @@ public class VehicleAiEventHandler {
         }
         if (ModCompat.isRecruitsLoaded()) {
             RecruitsCompat.updateStrategicFire(mob);
+            RecruitsCompat.updateNavigation(mob);
         }
         if (!CommonConfig.ENABLE_VEHICLE_AI.get() || !mob.isPassenger()) {
             return;
