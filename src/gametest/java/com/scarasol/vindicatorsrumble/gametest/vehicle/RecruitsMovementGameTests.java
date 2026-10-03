@@ -72,6 +72,16 @@ public final class RecruitsMovementGameTests {
         });
     }
 
+    @GameTest(batch = "recruits_movement", template = "empty", timeoutTicks = 400)
+    public static void wheelVehicleCruisesThenStopsAtCommandPoint(GameTestHelper helper) {
+        verifyGroundCruise(helper, "sodayo_pick_up_hmg");
+    }
+
+    @GameTest(batch = "recruits_movement", template = "empty", timeoutTicks = 400)
+    public static void trackedVehicleCruisesThenStopsAtCommandPoint(GameTestHelper helper) {
+        verifyGroundCruise(helper, "m_1a_2");
+    }
+
     @GameTest(batch = "recruits_movement", template = "empty", timeoutTicks = 600)
     public static void followingReadsMovingOwnerAndCancelStopsFlight(GameTestHelper helper) {
         Fixture fixture = fixture(helper, "ah_6", true);
@@ -212,6 +222,41 @@ public final class RecruitsMovementGameTests {
         });
     }
 
+    private static void verifyGroundCruise(GameTestHelper helper, String type) {
+        Fixture fixture = fixture(helper, type, false);
+        fixture.pointCommand(64);
+        double[] cruiseSpeedSum = {0.0D};
+        double[] previousSpeed = {0.0D};
+        int[] cruiseSamples = {0};
+        int[] abruptSlowdowns = {0};
+        helper.onEachTick(() -> {
+            fixture.observe(helper);
+            double traveled = fixture.vehicle.getZ() - fixture.origin.getZ() - 0.5D;
+            double speed = fixture.vehicle.getDeltaMovement().horizontalDistance();
+            if (traveled >= 12.0D && traveled <= 40.0D) {
+                cruiseSpeedSum[0] += speed;
+                cruiseSamples[0]++;
+                if (previousSpeed[0] - speed > 0.06D) abruptSlowdowns[0]++;
+            }
+            previousSpeed[0] = speed;
+            if (!fixture.driver.getShouldMovePos() && fixture.driver.getFollowState() == 2) {
+                double averageSpeed = cruiseSpeedSum[0] / Math.max(1, cruiseSamples[0]);
+                LOGGER.info("Recruit ground cruise vehicle={} arrivalTick={} averageSpeed={} samples={} abruptSlowdowns={} distance={} speed={}",
+                        type, helper.getTick(), averageSpeed, cruiseSamples[0], abruptSlowdowns[0],
+                        horizontalDistance(fixture.vehicle.position(), fixture.destination(64)), speed);
+                helper.assertTrue(cruiseSamples[0] >= 5 && averageSpeed >= 0.3D,
+                        "Open-ground command crawled instead of cruising: averageSpeed=" + averageSpeed);
+                helper.assertTrue(abruptSlowdowns[0] == 0,
+                        "Open-ground command repeatedly braked during cruise: slowdowns=" + abruptSlowdowns[0]);
+                helper.assertTrue(horizontalDistance(fixture.vehicle.position(), fixture.destination(64)) <= 4.0D,
+                        "Ground cruise overshot the command point");
+                helper.assertTrue(speed < 0.08D, "Ground command completed without stopping");
+                fixture.close();
+                helper.succeed();
+            }
+        });
+    }
+
     private static Fixture fixture(GameTestHelper helper, String type, boolean airborne) {
         CommonConfig.VEHICLE_AI_DEBUG.set(true);
         ServerLevel level = helper.getLevel();
@@ -247,8 +292,11 @@ public final class RecruitsMovementGameTests {
     }
 
     private static Entity create(ServerLevel level, String namespace, String id) {
-        EntityType<?> type = ForgeRegistries.ENTITY_TYPES.getValue(new ResourceLocation(namespace, id));
-        if (type == null) throw new AssertionError("Missing movement fixture " + namespace + ":" + id);
+        ResourceLocation key = new ResourceLocation(namespace, id);
+        if (!ForgeRegistries.ENTITY_TYPES.containsKey(key)) {
+            throw new AssertionError("Missing movement fixture " + key);
+        }
+        EntityType<?> type = ForgeRegistries.ENTITY_TYPES.getValue(key);
         Entity entity = type.create(level);
         if (entity == null) throw new AssertionError("Could not create movement fixture");
         return entity;

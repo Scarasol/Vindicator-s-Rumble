@@ -10,7 +10,8 @@ final class GroundSteering {
     private static final double RESIDUAL_MOTION_SQR = 1.0E-6D;
     private static final double TURN_BRAKE_SPEED_SQR = 0.0225D;
 
-    static SteeringResult steerToward(VehicleController controller, Vec3 waypoint, boolean preferStableFire, int previousTurnDirection) {
+    static SteeringResult steerToward(VehicleController controller, Vec3 waypoint, double remainingDistanceSqr,
+                                     boolean preferStableFire, int previousTurnDirection) {
         Vec3 position = controller.position();
         double dx = waypoint.x - position.x;
         double dz = waypoint.z - position.z;
@@ -33,7 +34,7 @@ final class GroundSteering {
         float forwardAngle = preferStableFire ? 80.0F : 135.0F;
         boolean brake = !reverse && absDiff > brakeAngle && horizontalSpeedSqr > TURN_BRAKE_SPEED_SQR;
         boolean forward = !reverse && !brake && (absDiff < forwardAngle || horizontalSpeedSqr < TURN_BRAKE_SPEED_SQR);
-        boolean sprint = !preferStableFire && forward && !left && !right && absDiff < 18.0F && distanceSqr > 256.0D;
+        boolean sprint = !preferStableFire && forward && !left && !right && absDiff < 18.0F && remainingDistanceSqr > 256.0D;
 
         return new SteeringResult(new VehicleInput(forward, reverse, left, right, brake, sprint, false, false, false, false), turnDirection);
     }

@@ -456,7 +456,8 @@ class GroundDriveMetricsTest {
         double minDistance = horizontalDistance(controller.position(), target);
         double maxDistance = minDistance;
         for (int tick = 0; tick < ticks; tick++) {
-            GroundSteering.SteeringResult steering = GroundSteering.steerToward(controller, target, preferStableFire, turnDirection);
+            GroundSteering.SteeringResult steering = GroundSteering.steerToward(controller, target,
+                    target.subtract(controller.position()).horizontalDistanceSqr(), preferStableFire, turnDirection);
             turnDirection = steering.turnDirection();
             VehicleInput input = steering.input();
             if (input.forward()) {

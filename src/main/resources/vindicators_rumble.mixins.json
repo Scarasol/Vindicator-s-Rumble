@@ -15,6 +15,7 @@
     "TargetingConditionsMixin",
     "recruits.CommandEventsMixin",
     "recruits.RecruitMovementGoalMixin",
+    "recruits.RecruitPathfinderMixin",
     "sbw.GunRayFriendlyFireMixin",
     "sbw.ProjectileFriendlyFireMixin",
     "sbw.SbwInventoryToolMixin",

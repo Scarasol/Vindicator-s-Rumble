@@ -22,6 +22,58 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class GroundSteeringTest {
     @Test
+    void distantDestinationAcceleratesWithShortLocalWaypointForWheelsAndTracks() {
+        for (VehicleMovementType type : List.of(VehicleMovementType.WHEEL, VehicleMovementType.TRACK)) {
+            TestController controller = new TestController(Vec3.ZERO, 0.0F, Vec3.ZERO, type);
+
+            VehicleInput input = GroundSteering.steerToward(controller,
+                    new Vec3(0.0D, 0.0D, 8.0D), 1600.0D, false, 0).input();
+
+            assertTrue(input.forward());
+            assertTrue(input.sprint());
+            assertFalse(input.brake());
+        }
+    }
+
+    @Test
+    void nearbyDestinationDoesNotAccelerateDespiteDistantWaypoint() {
+        TestController controller = new TestController(Vec3.ZERO, 0.0F, Vec3.ZERO, VehicleMovementType.WHEEL);
+
+        VehicleInput input = GroundSteering.steerToward(controller,
+                new Vec3(0.0D, 0.0D, 20.0D), 100.0D, false, 0).input();
+
+        assertTrue(input.forward());
+        assertFalse(input.sprint());
+    }
+
+    @Test
+    void distantDestinationDoesNotOverrideTurningOrStableFire() {
+        TestController controller = new TestController(Vec3.ZERO, 0.0F, Vec3.ZERO, VehicleMovementType.WHEEL);
+
+        VehicleInput turning = GroundSteering.steerToward(controller,
+                new Vec3(8.0D, 0.0D, 8.0D), 1600.0D, false, 0).input();
+        VehicleInput stableFire = GroundSteering.steerToward(controller,
+                new Vec3(0.0D, 0.0D, 8.0D), 1600.0D, true, 0).input();
+
+        assertTrue(turning.left());
+        assertFalse(turning.sprint());
+        assertFalse(stableFire.sprint());
+    }
+
+    @Test
+    void closeWaypointStillBrakesWithDistantDestination() {
+        TestController controller = new TestController(Vec3.ZERO, 0.0F,
+                new Vec3(0.0D, 0.0D, 0.3D), VehicleMovementType.WHEEL);
+
+        VehicleInput input = GroundSteering.steerToward(controller,
+                new Vec3(0.0D, 0.0D, 1.0D), 1600.0D, false, 0).input();
+
+        assertTrue(input.brake());
+        assertFalse(input.forward());
+        assertFalse(input.sprint());
+    }
+
+    @Test
     void ramSteeringFeedsThrottleWhenThereIsRunUpRoomAndTurnIsLarge() {
         TestController controller = new TestController(Vec3.ZERO, 0.0F, Vec3.ZERO, VehicleMovementType.WHEEL);
 

@@ -306,9 +306,12 @@ public final class GroundDriveStrategy implements DriveStrategy {
             return;
         }
 
+        double remainingDistanceSqr = this.horizontalDistanceSqr(controller.position(),
+                request.intent() == DriveIntent.MOVE_TO
+                        ? this.navigationTargetPosition(request).orElse(waypoint) : waypoint);
         GroundSteering.SteeringResult steering = request.intent() == DriveIntent.RAM_TARGET
                 ? GroundSteering.steerRamToward(controller, waypoint, this.turnDirection)
-                : GroundSteering.steerToward(controller, waypoint, request.preferStableFire(), this.turnDirection);
+                : GroundSteering.steerToward(controller, waypoint, remainingDistanceSqr, request.preferStableFire(), this.turnDirection);
         VehicleInput input = steering.input();
         this.turnDirection = steering.turnDirection();
         VehicleAiLogger.debugEvery(this.mob, 20, "Drive following waypoint {} with input {}", waypoint, input);
@@ -730,7 +733,11 @@ public final class GroundDriveStrategy implements DriveStrategy {
         if (request.desiredDistance() <= 0.0D) {
             return false;
         }
-        double desiredDistanceSqr = request.desiredDistance() * request.desiredDistance();
+        double desiredDistance = request.desiredDistance();
+        if (this.mode == DriveVehicleGoal.Mode.NAVIGATION) {
+            desiredDistance += this.controller.estimatedHorizontalStoppingDistance();
+        }
+        double desiredDistanceSqr = desiredDistance * desiredDistance;
         if (request.targetEntity().isPresent()) {
             Entity target = request.targetEntity().get();
             return target.isAlive()
@@ -898,6 +905,13 @@ public final class GroundDriveStrategy implements DriveStrategy {
                     advanced,
                     request.targetPosition().orElse(null),
                     request.targetEntity().map(Entity::getId).orElse(-1));
+            if (request.intent() == DriveIntent.MOVE_TO && request.path().isEmpty() && !this.path.canReach()) {
+                this.planPath(request);
+                if (this.path != null && this.path.getNodeCount() > 1
+                        && this.horizontalDistanceSqr(position, nodeCenter(this.path.getEndNode())) > passDistanceSqr) {
+                    return this.lookaheadWaypoint(position);
+                }
+            }
             if (this.shouldRecoverFromExhaustedPath(request)) {
                 this.beginManeuver(request, "path exhausted");
                 return null;
@@ -1663,7 +1677,8 @@ public final class GroundDriveStrategy implements DriveStrategy {
         if (isTargetDistanceIntent(request.intent()) && this.retreatingFromTarget) {
             return GroundSteering.retreatFrom(this.controller, target, this.turnDirection).input();
         }
-        return GroundSteering.steerToward(this.controller, target, request.preferStableFire(), this.turnDirection).input();
+        return GroundSteering.steerToward(this.controller, target,
+                this.horizontalDistanceSqr(this.controller.position(), target), request.preferStableFire(), this.turnDirection).input();
     }
 
     static boolean canExitManeuverWithInput(VehicleInput input, GroundClearance clearance) {
