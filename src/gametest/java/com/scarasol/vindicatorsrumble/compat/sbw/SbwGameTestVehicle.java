@@ -2,6 +2,7 @@ package com.scarasol.vindicatorsrumble.compat.sbw;
 
 import com.atsuishio.superbwarfare.entity.vehicle.base.VehicleEntity;
 import com.atsuishio.superbwarfare.data.gun.GunProp;
+import com.google.gson.JsonObject;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.item.ItemStack;
 
@@ -71,6 +72,24 @@ public final class SbwGameTestVehicle {
         VehicleEntity vehicle = (VehicleEntity) entity;
         vehicle.setHoverMode(true);
         vehicle.setPower(0.09F);
+    }
+
+    public static void increaseCombatFixtureDurability(Entity entity) {
+        VehicleEntity vehicle = (VehicleEntity) entity;
+        JsonObject properties = new JsonObject();
+        JsonObject parts = new JsonObject();
+        properties.addProperty("MaxHealth", 1_000_000.0F);
+        for (String part : List.of("Turret", "LeftWheel", "RightWheel", "MainEngine", "SubEngine")) {
+            parts.addProperty(part, 1_000_000.0F);
+        }
+        properties.add("PartHealth", parts);
+        vehicle.setOverride(properties.toString());
+        vehicle.setHealth(vehicle.getMaxHealth());
+        vehicle.setTurretHealth(vehicle.getTurretMaxHealth());
+        vehicle.setLeftWheelHealth(vehicle.getLeftWheelMaxHealth());
+        vehicle.setRightWheelHealth(vehicle.getRightWheelMaxHealth());
+        vehicle.setMainEngineHealth(vehicle.getMainEngineMaxHealth());
+        vehicle.setSubEngineHealth(vehicle.getSubEngineMaxHealth());
     }
 
     public static boolean movePassengerToSeat(Entity entity, Entity passenger, int seat) {

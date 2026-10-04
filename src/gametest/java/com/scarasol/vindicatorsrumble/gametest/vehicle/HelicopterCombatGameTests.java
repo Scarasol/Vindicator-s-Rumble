@@ -8,6 +8,8 @@ import com.scarasol.vindicatorsrumble.compat.sbw.SbwGameTestVehicle;
 import com.scarasol.vindicatorsrumble.config.CommonConfig;
 import com.scarasol.sona.init.SonaMobEffects;
 import net.minecraft.core.BlockPos;
+import net.minecraft.gametest.framework.AfterBatch;
+import net.minecraft.gametest.framework.BeforeBatch;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.resources.ResourceLocation;
@@ -34,8 +36,20 @@ import java.util.concurrent.atomic.AtomicInteger;
 @PrefixGameTestTemplate(false)
 public final class HelicopterCombatGameTests {
     private static final AtomicInteger ARENA = new AtomicInteger();
+    private static boolean previousAmmoRequirement;
 
     private HelicopterCombatGameTests() {
+    }
+
+    @BeforeBatch(batch = "helicopter_combat")
+    public static void requireFiniteFixtureAmmo(ServerLevel level) {
+        previousAmmoRequirement = CommonConfig.VEHICLE_AI_NEEDS_AMMO.get();
+        CommonConfig.VEHICLE_AI_NEEDS_AMMO.set(true);
+    }
+
+    @AfterBatch(batch = "helicopter_combat")
+    public static void restoreAmmoRequirement(ServerLevel level) {
+        CommonConfig.VEHICLE_AI_NEEDS_AMMO.set(previousAmmoRequirement);
     }
 
     @GameTest(batch = "helicopter_combat", template = "empty", timeoutTicks = 260)
@@ -46,6 +60,57 @@ public final class HelicopterCombatGameTests {
     @GameTest(batch = "helicopter_combat", template = "empty", timeoutTicks = 260)
     public static void mi28FiresAtASlightlyLowerAirborneTargetWithoutASteepDive(GameTestHelper helper) {
         verifyAirCombat(helper, "mi_28", -4.0D);
+    }
+
+    @GameTest(batch = "helicopter_combat", template = "empty", timeoutTicks = 520)
+    public static void opposingAh6sDoNotKeepRaisingEachOthersCombatHeight(GameTestHelper helper) {
+        verifyReciprocalCombat(helper, "ah_6", "ah_6");
+    }
+
+    @GameTest(batch = "helicopter_combat", template = "empty", timeoutTicks = 520)
+    public static void differentSizedHelicoptersDoNotKeepRaisingEachOthersCombatHeight(GameTestHelper helper) {
+        verifyReciprocalCombat(helper, "ah_6", "mi_28");
+    }
+
+    @GameTest(batch = "helicopter_combat", template = "empty", timeoutTicks = 340)
+    public static void roofTargetKeepsAnAlreadySafeCombatHeight(GameTestHelper helper) {
+        Fixture fixture = new Fixture(helper, "ah_6", 0.0D);
+        for (int x = -8; x <= 8; x++) {
+            for (int z = 32; z <= 48; z++) {
+                fixture.level.setBlock(fixture.origin.offset(x, 31, z), Blocks.BEDROCK.defaultBlockState(), 2);
+            }
+        }
+        fixture.target.stopRiding();
+        fixture.target.setPos(Vec3.atBottomCenterOf(fixture.origin.offset(0, 32, 40)));
+        fixture.target.setOnGround(true);
+        double initialHeight = fixture.target.getY() + 12.0D;
+        fixture.vehicle.setPos(fixture.vehicle.getX(), initialHeight, fixture.vehicle.getZ());
+        SbwGameTestVehicle.prepareUnarmedAirborne(fixture.vehicle);
+        SbwGameTestVehicle.setHoverFixture(fixture.vehicle);
+        long[] acquiredAt = {-1};
+        helper.onEachTick(() -> {
+            CommonConfig.VEHICLE_AI_DEBUG.set(true);
+            if (helper.getTick() % 20 == 0) {
+                LogUtils.getLogger().info("Helicopter roof height tick={} acquired={} aircraftY={} targetY={} initialHeight={} power={} velocity={} goals={}",
+                        helper.getTick(), fixture.driver.getTarget() == fixture.target, fixture.vehicle.getY(),
+                        fixture.target.getY(), initialHeight, fixture.controller.power(), fixture.vehicle.getDeltaMovement(),
+                        fixture.driver.goalSelector.getRunningGoals()
+                                .map(goal -> goal.getGoal().getClass().getSimpleName()).toList());
+            }
+            helper.assertTrue(fixture.vehicle.getY() >= initialHeight - 4.0D,
+                    "Safe rooftop combat descended toward the LOS boundary: aircraftY=" + fixture.vehicle.getY());
+            helper.assertTrue(fixture.vehicle.getY() <= initialHeight + 5.0D,
+                    "Safe rooftop combat kept climbing");
+            if (fixture.driver.getTarget() != fixture.target) {
+                helper.assertTrue(acquiredAt[0] < 0, "Rooftop target was lost after acquisition");
+                helper.assertTrue(helper.getTick() < 100, "Rooftop target was not naturally acquired");
+                return;
+            }
+            if (acquiredAt[0] < 0) acquiredAt[0] = helper.getTick();
+            if (helper.getTick() - acquiredAt[0] < 220) return;
+            fixture.close();
+            helper.succeed();
+        });
     }
 
     @GameTest(batch = "helicopter_combat", template = "empty", timeoutTicks = 80)
@@ -131,6 +196,45 @@ public final class HelicopterCombatGameTests {
         });
     }
 
+    private static void verifyReciprocalCombat(GameTestHelper helper, String helicopter, String opponent) {
+        Fixture fixture = new Fixture(helper, helicopter, 0.0D, opponent);
+        VehicleController targetController = VehicleControllers.create(fixture.targetVehicle).orElseThrow();
+        double initialHeight = Math.max(fixture.vehicle.getBoundingBox().getCenter().y,
+                fixture.targetVehicle.getBoundingBox().getCenter().y);
+        double[] highest = {initialHeight};
+        long[] acquiredAt = {-1};
+        helper.onEachTick(() -> {
+            double height = Math.max(fixture.vehicle.getBoundingBox().getCenter().y,
+                    fixture.targetVehicle.getBoundingBox().getCenter().y);
+            highest[0] = Math.max(highest[0], height);
+            if (helper.getTick() % 20 == 0) {
+                LogUtils.getLogger().info("Helicopter reciprocal combat tick={} vehicles={}/{} acquired={}/{} heights={}/{} initialHeight={} highest={} pitch={}/{} shots={}/{}",
+                        helper.getTick(), helicopter, opponent, fixture.driver.getTarget() == fixture.target,
+                        fixture.target.getTarget() == fixture.driver, fixture.vehicle.getBoundingBox().getCenter().y,
+                        fixture.targetVehicle.getBoundingBox().getCenter().y, initialHeight, highest[0],
+                        fixture.controller.pitch(), targetController.pitch(), fixture.firedShots, fixture.targetFiredShots);
+            }
+            helper.assertTrue(fixture.driver.isPassenger() && fixture.target.isPassenger(),
+                    "Reciprocal combat lost a passenger: driverAlive=" + fixture.driver.isAlive()
+                            + " targetAlive=" + fixture.target.isAlive() + " driverVehicle=" + fixture.driver.getVehicle()
+                            + " targetVehicle=" + fixture.target.getVehicle() + " wrecks="
+                            + fixture.controller.isWreck() + "/" + targetController.isWreck());
+            helper.assertTrue(height <= initialHeight + 8.0D,
+                    "Opposing aircraft kept climbing: height=" + height + " initialHeight=" + initialHeight);
+            if (fixture.driver.getTarget() != fixture.target || fixture.target.getTarget() != fixture.driver) {
+                helper.assertTrue(acquiredAt[0] < 0, "Reciprocal combat lost a naturally acquired target");
+                helper.assertTrue(helper.getTick() < 120, "Opposing pilots did not naturally acquire each other");
+                return;
+            }
+            if (acquiredAt[0] < 0) acquiredAt[0] = helper.getTick();
+            if (helper.getTick() - acquiredAt[0] < 360) return;
+            helper.assertTrue(fixture.firedShots > 0 && fixture.targetFiredShots > 0,
+                    "Both aircraft must actually fire during reciprocal combat");
+            fixture.close();
+            helper.succeed();
+        });
+    }
+
     private static final class Fixture implements AutoCloseable {
         final ServerLevel level;
         final BlockPos origin;
@@ -143,8 +247,13 @@ public final class HelicopterCombatGameTests {
         final org.apache.logging.log4j.core.Logger logger;
         final AbstractAppender observer;
         int firedShots;
+        int targetFiredShots;
 
         Fixture(GameTestHelper helper, String helicopter, double targetHeightOffset) {
+            this(helper, helicopter, targetHeightOffset, null);
+        }
+
+        Fixture(GameTestHelper helper, String helicopter, double targetHeightOffset, String opponent) {
             CommonConfig.VEHICLE_AI_DEBUG.set(true);
             this.level = helper.getLevel();
             this.origin = new BlockPos(4096 + ARENA.getAndIncrement() * 256, 5, 4096);
@@ -161,34 +270,46 @@ public final class HelicopterCombatGameTests {
                 }
             }
             this.vehicle = this.create(helicopter, Vec3.atBottomCenterOf(this.origin).add(0.0D, 32.0D, 0.0D));
-            this.targetVehicle = this.create(helicopter,
+            this.targetVehicle = this.create(opponent == null ? helicopter : opponent,
                     Vec3.atBottomCenterOf(this.origin.offset(0, 0, 40)).add(0.0D, 32.0D + targetHeightOffset, 0.0D));
             this.controller = VehicleControllers.create(this.vehicle).orElseThrow();
-            this.target = EntityType.VILLAGER.create(this.level);
-            this.target.setNoAi(true);
+            this.target = opponent == null ? EntityType.VILLAGER.create(this.level)
+                    : (Mob) ForgeRegistries.ENTITY_TYPES.getValue(new ResourceLocation("guardvillagers", "guard"))
+                    .create(this.level);
+            this.target.setNoAi(opponent == null);
             this.target.setPersistenceRequired();
             this.target.addEffect(new MobEffectInstance(MobEffects.DAMAGE_RESISTANCE, Integer.MAX_VALUE, 255, false, false));
             this.target.setPos(this.targetVehicle.position());
-            this.target.addEffect(new MobEffectInstance(SonaMobEffects.EXPOSURE.get(), 260, 3, false, false));
+            this.target.addEffect(new MobEffectInstance(SonaMobEffects.EXPOSURE.get(), 600, 3, false, false));
             this.level.addFreshEntity(this.target);
             helper.assertTrue(this.target.startRiding(this.targetVehicle, true), "Air target could not mount");
             this.driver = EntityType.VINDICATOR.create(this.level);
             this.driver.setPersistenceRequired();
-            this.driver.setInvulnerable(true);
+            this.driver.setInvulnerable(opponent == null);
+            this.driver.addEffect(new MobEffectInstance(MobEffects.DAMAGE_RESISTANCE, Integer.MAX_VALUE, 255, false, false));
+            this.driver.addEffect(new MobEffectInstance(SonaMobEffects.EXPOSURE.get(), 600, 3, false, false));
             this.driver.setPos(this.vehicle.position());
             this.level.addFreshEntity(this.driver);
             helper.assertTrue(this.driver.startRiding(this.vehicle, true), "Combat driver could not mount");
             SbwGameTestVehicle.prepareArmedAirborne(this.vehicle);
+            if (opponent != null) {
+                this.targetVehicle.setYRot(180.0F);
+                SbwGameTestVehicle.prepareArmedAirborne(this.targetVehicle);
+                SbwGameTestVehicle.increaseCombatFixtureDurability(this.vehicle);
+                SbwGameTestVehicle.increaseCombatFixtureDurability(this.targetVehicle);
+            }
             this.logger = (org.apache.logging.log4j.core.Logger) LogManager.getLogger(
                     "com.scarasol.vindicatorsrumble.VindicatorsRumbleMod");
             String driverPrefix = "[entity.minecraft.vindicator#" + this.driver.getId() + "]";
+            String targetPrefix = "[entity.guardvillagers.guard#" + this.target.getId() + "]";
             this.observer = new AbstractAppender("air_combat_" + this.driver.getId(), null, null, false) {
                 @Override
                 public void append(LogEvent event) {
                     String message = event.getMessage().getFormattedMessage();
-                    if (message.contains(driverPrefix) && message.contains("SBW fire called")
+                    if (message.contains("SBW fire called")
                             && message.contains("groundTarget=false") && message.contains("canShootBefore=true")) {
-                        firedShots++;
+                        if (message.contains(driverPrefix)) firedShots++;
+                        if (message.contains(targetPrefix)) targetFiredShots++;
                     }
                 }
             };

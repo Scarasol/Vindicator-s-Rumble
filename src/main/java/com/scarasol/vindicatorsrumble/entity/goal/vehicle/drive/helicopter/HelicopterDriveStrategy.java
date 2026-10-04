@@ -118,7 +118,7 @@ public final class HelicopterDriveStrategy implements DriveStrategy {
                 && this.fixedWeaponAimedAt(target, fixedWeapon.get());
         Vec3 targetPoint = this.targetPointForPlan(target, stableFire);
         double recoveryFloorY = target == null ? Double.NaN
-                : HelicopterFlightPlanner.recoveryFloorY(aircraftState, targetCenter(target));
+                : HelicopterFlightPlanner.recoveryFloorY(controller, aircraftState, target);
         double hoverHeight = CommonConfig.HELICOPTER_HOVER_HEIGHT.get();
         boolean pullOutBlocksRecovery = targetPoint != null && stableFire
                 && HelicopterFlightPlanner.needsPassPullOut(aircraftState);
@@ -137,7 +137,7 @@ public final class HelicopterDriveStrategy implements DriveStrategy {
                         request.desiredDistance(), environment)
                         : this.helicopterPlan(
                         aircraftState,
-                        target == null ? -1 : target.getId(),
+                        target,
                         targetPoint,
                         recoveryFloorY,
                         stableFire,
@@ -238,7 +238,7 @@ public final class HelicopterDriveStrategy implements DriveStrategy {
     }
 
     private HelicopterFlightPlanner.Plan helicopterPlan(HelicopterFlightPlanner.AircraftState aircraftState,
-                                                         int targetId, Vec3 targetCenter, double recoveryFloorY,
+                                                         Entity target, Vec3 targetCenter, double recoveryFloorY,
                                                          boolean preferStableFire, boolean fixedWeaponAimed,
                                                          boolean fixedWeaponAttackActive,
                                                          boolean fixedWeaponAttackRecovering,
@@ -248,10 +248,11 @@ public final class HelicopterDriveStrategy implements DriveStrategy {
             this.idleHoverAnchor = null;
         }
         double hoverHeight = CommonConfig.HELICOPTER_HOVER_HEIGHT.get();
-        double desiredY = HelicopterFlightPlanner.desiredY(aircraftState, targetCenter, hoverHeight, environment);
+        double desiredY = this.flightPlanner.desiredY(
+                this.controller, aircraftState, target, hoverHeight, environment);
         HelicopterFlightPlanner.Plan plan = this.chooseHelicopterPlan(
                 aircraftState,
-                targetId,
+                target == null ? -1 : target.getId(),
                 targetCenter,
                 desiredY,
                 recoveryFloorY,

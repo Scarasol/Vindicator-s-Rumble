@@ -26,6 +26,29 @@ class HelicopterFlightControlCharacterizationTest {
     }
 
     @Test
+    void idleHeightKeepsAReasonableHeightInsteadOfTrackingThePreferredPoint() {
+        HelicopterFlightPlanner planner = new HelicopterFlightPlanner();
+        for (double height : new double[]{18.0D, 22.0D, 27.0D}) {
+            HelicopterFlightPlanner.AircraftState aircraft = state(
+                    new Vec3(0.0D, height, 0.0D), Vec3.ZERO, 0.0F, 0.0F, 0.0F,
+                    true, true, 0.09F, height);
+            assertEquals(height, planner.desiredY(null, aircraft, null, 18.0D, HelicopterEnvironment.NONE), EPSILON);
+        }
+    }
+
+    @Test
+    void heightCorrectionEntersTheBandAndStillHonorsTerrainSafety() {
+        HelicopterFlightPlanner planner = new HelicopterFlightPlanner();
+        HelicopterFlightPlanner.AircraftState low = state(
+                new Vec3(0.0D, 10.0D, 0.0D), Vec3.ZERO, 0.0F, 0.0F, 0.0F,
+                true, true, 0.09F, 10.0D);
+        double corrected = planner.desiredY(null, low, null, 18.0D, HelicopterEnvironment.NONE);
+        assertTrue(corrected > 16.0D && corrected < 28.0D);
+        HelicopterEnvironment terrain = new HelicopterEnvironment(true, false, true, 0, 35.0D, 24.0D, 24.0D);
+        assertTrue(planner.desiredY(null, low, null, 18.0D, terrain) > 35.0D);
+    }
+
+    @Test
     void divePassExitTracksTheTargetWithoutChangingItsRelativeDirection() {
         Vec3 direction = new Vec3(0.6D, 0.0D, 0.8D);
         Vec3 firstTarget = new Vec3(10.0D, 4.0D, -6.0D);

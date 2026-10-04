@@ -1,6 +1,7 @@
 package com.scarasol.vindicatorsrumble.entity.goal.vehicle.drive.helicopter;
 
 import com.scarasol.vindicatorsrumble.api.vehicle.VehicleController;
+import com.scarasol.vindicatorsrumble.compat.VehicleControllers;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.core.BlockPos;
@@ -44,8 +45,12 @@ public final class HelicopterFlightPlanner {
     private boolean retreatCommitted;
     private long lastCombatPlanTick = Long.MIN_VALUE;
     private long lastRetreatSearchTick = Long.MIN_VALUE;
+    private double hoverY = Double.NaN;
+    private int hoverTargetId = -1;
 
     void reset() {
+        this.hoverY = Double.NaN;
+        this.hoverTargetId = -1;
         this.clearRetreatRoute();
         this.lastCombatPlanTick = Long.MIN_VALUE;
         this.lastRetreatSearchTick = Long.MIN_VALUE;
@@ -57,6 +62,11 @@ public final class HelicopterFlightPlanner {
                      double hoverHeight, double followRange,
                      Predicate<HelicopterEnvironment> visibilityRecoveryBlocked,
                      BiFunction<HelicopterEnvironment, Vec3, Plan> planSelector) {
+        int targetId = target == null ? -1 : target.getId();
+        if (this.hoverTargetId != targetId || this.visibilityRecovery.recovering()) {
+            this.hoverTargetId = targetId;
+            this.hoverY = state.position().y;
+        }
         Plan sensingPlan = planSelector.apply(HelicopterEnvironment.NONE, null);
         Vec3 recoveryWaypoint = this.visibilityRecovery.waypoint();
         HelicopterEnvironment environment = this.environmentProbe.sample(
@@ -90,28 +100,33 @@ public final class HelicopterFlightPlanner {
             environment = aligned;
             plan = planSelector.apply(environment, recoveryWaypoint);
         }
+        this.hoverY = this.visibilityRecovery.recovering() ? state.position().y : plan.desiredPosition().y;
         return plan.withEnvironment(environment, target == null || target.getRootVehicle().onGround()
                 ? HelicopterFlightControl.DIVE_PASS_PITCH_BONUS : 0.0D);
     }
 
-    static double desiredY(AircraftState state, @Nullable Vec3 targetCenter, double hoverHeight,
-                           HelicopterEnvironment environment) {
+    double desiredY(VehicleController controller, AircraftState state, @Nullable Entity target,
+                    double hoverHeight, HelicopterEnvironment environment) {
         HelicopterEnvironment env = environment == null ? HelicopterEnvironment.NONE : environment;
         Vec3 position = state.position();
         double groundY = position.y - Math.min(state.altitude(), ALTITUDE_SAMPLE);
         double minHoverY = groundY + Math.max(SAFE_ALTITUDE, hoverHeight - 2.0D);
-        double maxHoverY = groundY + hoverHeight + 10.0D;
-        double desiredY = groundY + hoverHeight;
-        desiredY = targetCenter == null
-                ? clamp(desiredY, minHoverY, maxHoverY)
-                : targetAwareHoverY(desiredY, groundY, targetCenter, hoverHeight);
-        return terrainAwareY(desiredY, env);
+        if (target != null) {
+            minHoverY = Math.max(minHoverY, targetFloorY(controller, target));
+        }
+        minHoverY = terrainAwareY(minHoverY, env);
+        double maxHoverY = Math.max(groundY + hoverHeight + 10.0D,
+                minHoverY + TARGET_HOVER_CLEARANCE * 2.0D);
+        double referenceY = Double.isNaN(this.hoverY) ? position.y : this.hoverY;
+        return referenceY < minHoverY || referenceY > maxHoverY
+                ? clamp(referenceY, minHoverY + VERTICAL_TOLERANCE, maxHoverY - VERTICAL_TOLERANCE)
+                : referenceY;
     }
 
-    static double recoveryFloorY(AircraftState state, Vec3 targetCenter) {
+    static double recoveryFloorY(VehicleController controller, AircraftState state, Entity target) {
         Vec3 position = state.position();
         double groundY = position.y - Math.min(state.altitude(), ALTITUDE_SAMPLE);
-        return Math.max(groundY + SAFE_ALTITUDE, targetCenter.y + TARGET_HOVER_CLEARANCE);
+        return Math.max(groundY + SAFE_ALTITUDE, targetFloorY(controller, target) + VERTICAL_TOLERANCE);
     }
 
     static boolean needsAltitudeCorrection(AircraftState state, double desiredY) {
@@ -133,11 +148,12 @@ public final class HelicopterFlightPlanner {
     Plan navigationPlan(VehicleController controller, AircraftState state, Vec3 destination,
                         double hoverHeight, double arrivalDistance, HelicopterEnvironment environment) {
         if (!controller.level().hasChunkAt(BlockPos.containing(destination))) {
-            return idlePlan(state, desiredY(state, null, hoverHeight, environment));
+            return idlePlan(state, this.desiredY(controller, state, null, hoverHeight, environment));
         }
         double groundY = controller.level().getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,
                 Mth.floor(destination.x), Mth.floor(destination.z));
-        double desiredY = Math.max(groundY + hoverHeight, desiredY(state, null, hoverHeight, environment));
+        double desiredY = Math.max(groundY + hoverHeight,
+                this.desiredY(controller, state, null, hoverHeight, environment));
         double stoppingDistance = controller.estimatedStabilizedHorizontalStoppingDistance();
         boolean obstruction = environment.frontClearance() < HelicopterEnvironmentProbe.RAY_RANGE;
         boolean blocked = state.altitude() < SAFE_ALTITUDE || environment.frontBlocked()
@@ -424,9 +440,14 @@ public final class HelicopterFlightPlanner {
         return new Vec3(aimPoint.x, y, aimPoint.z);
     }
 
-    private static double targetAwareHoverY(double desiredY, double groundY, Vec3 targetCenter, double hoverHeight) {
-        double minY = Math.max(groundY + SAFE_ALTITUDE, targetCenter.y + TARGET_HOVER_CLEARANCE);
-        return Math.max(desiredY, minY);
+    private static double targetFloorY(VehicleController controller, Entity target) {
+        Entity vehicle = target.getRootVehicle();
+        double centerY = vehicle.getBoundingBox().getCenter().y;
+        boolean airborne = !vehicle.onGround() && VehicleControllers.create(vehicle)
+                .map(VehicleController::supportsFlightControl).orElse(false);
+        // Air combat compares body centers; ground targets retain the LOS clearance margin.
+        return airborne ? centerY - (controller.boundingBox().getCenter().y - controller.position().y)
+                - TARGET_HOVER_CLEARANCE : centerY + TARGET_HOVER_CLEARANCE - VERTICAL_TOLERANCE;
     }
 
     private static double terrainAwareY(double desiredY, HelicopterEnvironment environment) {
