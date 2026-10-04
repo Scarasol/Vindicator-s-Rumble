@@ -53,6 +53,66 @@ class HelicopterFlightControlCharacterizationTest {
     }
 
     @Test
+    void unboostedPassTracksTheActualElevationWithoutForcingASteepDive() {
+        Vec3 position = new Vec3(0.0D, 40.0D, 0.0D);
+        for (HelicopterFlightPlanner.Phase phase : new HelicopterFlightPlanner.Phase[]{
+                HelicopterFlightPlanner.Phase.ATTACK_RUN, HelicopterFlightPlanner.Phase.DIVE_PASS}) {
+            for (double heightDifference : new double[]{-10.0D, -1.0D, -0.01D, 0.0D, 0.01D, 1.0D, 10.0D}) {
+                Vec3 aimPoint = position.add(40.0D, heightDifference, 0.0D);
+                HelicopterFlightPlanner.Plan pass = plan(
+                        position.add(80.0D, 6.0D, 0.0D), aimPoint, 1.0D, false, true, phase)
+                        .withEnvironment(HelicopterEnvironment.NONE, 0.0D);
+                VehicleFlightInput output = new HelicopterFlightControl().command(
+                        state(position, Vec3.ZERO, -90.0F, 0.0F, 0.0F,
+                                false, true, 0.07F, 40.0D),
+                        pass.flightRequest(), HelicopterEnvironment.NONE);
+                double elevation = -Math.toDegrees(Math.atan2(heightDifference, 40.0D));
+
+                assertEquals(elevation / 1.5D, output.mouseY(), EPSILON,
+                        phase + " heightDifference=" + heightDifference);
+                assertTrue(output.input().forward());
+                assertTrue(output.input().sprint());
+                assertFalse(output.input().up());
+            }
+        }
+    }
+
+    @Test
+    void unboostedPassUsesAltitudeTrimInsteadOfContinuouslyIncreasingPower() {
+        Vec3 position = new Vec3(0.0D, 40.0D, 0.0D);
+        for (HelicopterFlightPlanner.Phase phase : new HelicopterFlightPlanner.Phase[]{
+                HelicopterFlightPlanner.Phase.ATTACK_RUN, HelicopterFlightPlanner.Phase.DIVE_PASS}) {
+            HelicopterFlightPlanner.Plan pass = plan(
+                    new Vec3(80.0D, 32.0D, 0.0D), new Vec3(40.0D, 38.0D, 0.0D), 1.0D, false, true, phase)
+                    .withEnvironment(HelicopterEnvironment.NONE, 0.0D);
+            VehicleFlightInput output = new HelicopterFlightControl().command(
+                    state(position, new Vec3(0.4D, 0.15D, 0.0D), -90.0F, 0.0F, 0.0F,
+                            false, true, 0.12F, 40.0D),
+                    pass.flightRequest(), HelicopterEnvironment.NONE);
+            assertFalse(output.input().forward(), phase.name());
+            assertTrue(output.input().down());
+            assertTrue(output.input().sprint());
+            assertFalse(output.input().up());
+        }
+    }
+
+    @Test
+    void groundPassRetainsTheExistingSteepDiveProfile() {
+        Vec3 position = new Vec3(0.0D, 40.0D, 0.0D);
+        Vec3 aimPoint = new Vec3(40.0D, 0.0D, 0.0D);
+        for (HelicopterFlightPlanner.Phase phase : new HelicopterFlightPlanner.Phase[]{
+                HelicopterFlightPlanner.Phase.ATTACK_RUN, HelicopterFlightPlanner.Phase.DIVE_PASS}) {
+            HelicopterFlightPlanner.Plan pass = plan(
+                    new Vec3(80.0D, 18.0D, 0.0D), aimPoint, 1.0D, false, true, phase);
+            VehicleFlightInput output = new HelicopterFlightControl().command(
+                    state(position, Vec3.ZERO, -90.0F, 50.0F, 0.0F,
+                            false, true, 0.12F, 40.0D),
+                    pass.flightRequest(), HelicopterEnvironment.NONE);
+            assertEquals(28.0D / 1.5D, output.mouseY(), EPSILON, phase.name());
+        }
+    }
+
+    @Test
     void passPullOutUsesPredictedGroundClearanceInsteadOfDiveAttitude() {
         assertFalse(HelicopterFlightPlanner.needsPassPullOut(
                 state(new Vec3(0.0D, 21.0D, 0.0D), new Vec3(0.6D, 0.05D, 0.0D),

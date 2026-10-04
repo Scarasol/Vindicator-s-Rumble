@@ -42,7 +42,7 @@ final class HelicopterFlightControl {
     private static final float APPROACH_MIN_MOVEMENT_POWER = 0.075F;
     private static final float PASS_THROUGH_MIN_POWER = 0.12F;
     private static final double TAKEOFF_MAX_MOUSE_X = 22.0D;
-    private static final double DIVE_PASS_PITCH_BONUS = 38.0D;
+    static final double DIVE_PASS_PITCH_BONUS = 38.0D;
     private static final double DIVE_PASS_MIN_DIVE_PITCH = 62.0D;
     private static final double DIVE_PASS_MAX_UP_PITCH = -18.0D;
     private static final double DIVE_PASS_MAX_DIVE_PITCH = 78.0D;
@@ -251,7 +251,7 @@ final class HelicopterFlightControl {
                                       boolean lateralStabilizing,
                                       boolean pullOut) {
         if (request.divePitch()) {
-            return divePassPitch(state, request.aimPoint());
+            return divePassPitch(state, request.aimPoint(), request.divePitchBoost());
         }
         if (pullOut) {
             double yError = request.desiredPosition().y - state.position().y;
@@ -328,12 +328,12 @@ final class HelicopterFlightControl {
         return Math.sqrt(Math.max(0.0D, horizontalSpeedSqr - closingSpeed * closingSpeed));
     }
 
-    private static double divePassPitch(HelicopterFlightPlanner.AircraftState state, Vec3 aimPoint) {
+    private static double divePassPitch(HelicopterFlightPlanner.AircraftState state, Vec3 aimPoint, double boost) {
         double targetPitch = divePassTargetPitch(state, aimPoint);
-        if (targetPitch <= 0.0D) {
+        if (targetPitch <= 0.0D || boost <= 0.0D) {
             return targetPitch;
         }
-        return clamp(Math.max(targetPitch + DIVE_PASS_PITCH_BONUS, DIVE_PASS_MIN_DIVE_PITCH),
+        return clamp(Math.max(targetPitch + boost, DIVE_PASS_MIN_DIVE_PITCH),
                 0.0D,
                 DIVE_PASS_MAX_DIVE_PITCH);
     }

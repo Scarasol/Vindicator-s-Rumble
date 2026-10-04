@@ -1,6 +1,7 @@
 package com.scarasol.vindicatorsrumble.compat.sbw;
 
 import com.atsuishio.superbwarfare.entity.vehicle.base.VehicleEntity;
+import com.atsuishio.superbwarfare.data.gun.GunProp;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.item.ItemStack;
 
@@ -52,6 +53,24 @@ public final class SbwGameTestVehicle {
                 vehicle.upInputDown(),
                 vehicle.downInputDown(),
                 vehicle.sprintInputDown());
+    }
+
+    public static void prepareArmedAirborne(Entity entity) {
+        prepareUnarmedAirborne(entity);
+        VehicleEntity vehicle = (VehicleEntity) entity;
+        for (String weapon : List.copyOf(vehicle.getGunDataMap().keySet())) {
+            vehicle.modifyGunData(weapon, data -> {
+                data.ammo.set(Math.max(1, data.get(GunProp.MAGAZINE)));
+                data.virtualAmmo.set(512);
+            });
+        }
+        setHoverFixture(entity);
+    }
+
+    public static void setHoverFixture(Entity entity) {
+        VehicleEntity vehicle = (VehicleEntity) entity;
+        vehicle.setHoverMode(true);
+        vehicle.setPower(0.09F);
     }
 
     public static boolean movePassengerToSeat(Entity entity, Entity passenger, int seat) {

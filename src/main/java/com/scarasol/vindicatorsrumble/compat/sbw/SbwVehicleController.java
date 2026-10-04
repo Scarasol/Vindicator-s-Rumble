@@ -1117,7 +1117,7 @@ public class SbwVehicleController implements VehicleController {
         boolean canShootBefore = data != null && this.vehicle.canShoot(mob);
         int heatBefore = this.vehicle.getWeaponHeat(seatIndex);
         int weaponIndex = weapon == null ? this.vehicle.getWeaponIndex(seatIndex) : weapon.id();
-        boolean groundTarget = this.prefersGroundTarget(mob, weaponIndex);
+        boolean groundTarget = this.prefersGroundTarget(mob, target, weaponIndex);
         UUID targetUuid = groundTarget ? null : target.getUUID();
         Vec3 targetPos = groundTarget ? this.resolveAimPoint(mob, target, weaponIndex, aimPoint) : null;
         AimMetrics metrics = this.aimMetrics(mob, target, weaponIndex, aimPoint);
@@ -1211,7 +1211,7 @@ public class SbwVehicleController implements VehicleController {
         if (target == null) {
             return fallback == null ? Vec3.ZERO : fallback;
         }
-        if (this.prefersGroundTarget(mob, weaponIndex)) {
+        if (this.prefersGroundTarget(mob, target, weaponIndex)) {
             return this.groundAimPoint(target);
         }
         if (fallback != null) {
@@ -1238,7 +1238,10 @@ public class SbwVehicleController implements VehicleController {
         return new Vec3(box.getCenter().x, box.minY + 0.08D, box.getCenter().z);
     }
 
-    private boolean prefersGroundTarget(Mob mob, int weaponIndex) {
+    private boolean prefersGroundTarget(Mob mob, Entity target, int weaponIndex) {
+        if (target == null || !target.getRootVehicle().onGround()) {
+            return false;
+        }
         int seatIndex = this.vehicle.getSeatIndex(mob);
         if (seatIndex < 0 || weaponIndex < 0) {
             return false;

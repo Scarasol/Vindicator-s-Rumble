@@ -90,7 +90,8 @@ public final class HelicopterFlightPlanner {
             environment = aligned;
             plan = planSelector.apply(environment, recoveryWaypoint);
         }
-        return plan.withEnvironment(environment);
+        return plan.withEnvironment(environment, target == null || target.getRootVehicle().onGround()
+                ? HelicopterFlightControl.DIVE_PASS_PITCH_BONUS : 0.0D);
     }
 
     static double desiredY(AircraftState state, @Nullable Vec3 targetCenter, double hoverHeight,
@@ -482,16 +483,16 @@ public final class HelicopterFlightPlanner {
     }
 
     record Plan(Vec3 desiredPosition, Vec3 aimPoint, double cruiseSpeed, boolean stopAtDestination,
-                boolean hasTarget, Phase phase, HelicopterEnvironment environment) {
+                boolean hasTarget, Phase phase, HelicopterEnvironment environment, double divePitchBoost) {
         Plan(Vec3 desiredPosition, Vec3 aimPoint, double cruiseSpeed, boolean stopAtDestination,
              boolean hasTarget, Phase phase) {
             this(desiredPosition, aimPoint, cruiseSpeed, stopAtDestination,
-                    hasTarget, phase, HelicopterEnvironment.NONE);
+                    hasTarget, phase, HelicopterEnvironment.NONE, HelicopterFlightControl.DIVE_PASS_PITCH_BONUS);
         }
 
-        Plan withEnvironment(HelicopterEnvironment environment) {
+        Plan withEnvironment(HelicopterEnvironment environment, double divePitchBoost) {
             return new Plan(this.desiredPosition, this.aimPoint, this.cruiseSpeed,
-                    this.stopAtDestination, this.hasTarget, this.phase, environment);
+                    this.stopAtDestination, this.hasTarget, this.phase, environment, divePitchBoost);
         }
 
         FlightRequest flightRequest() {
@@ -502,7 +503,7 @@ public final class HelicopterFlightPlanner {
     record FlightRequest(Vec3 desiredPosition, Vec3 aimPoint, double cruiseSpeed, boolean stopAtDestination,
                          boolean hasTarget, boolean approach, boolean takeoff, boolean forceForward,
                          boolean pullOutPower, boolean hoverLift, boolean stableHover,
-                         boolean holdPitch, boolean divePitch, boolean pullOutPitch,
+                         boolean holdPitch, boolean divePitch, double divePitchBoost, boolean pullOutPitch,
                          boolean throttleThroughBrake, boolean sprint, boolean takeoffYawLimit) {
     }
 
@@ -548,19 +549,21 @@ public final class HelicopterFlightPlanner {
         }
 
         private FlightRequest flightRequest(Plan plan) {
+            boolean unboostedPass = this.divePitch && plan.divePitchBoost() <= 0.0D;
             return new FlightRequest(plan.desiredPosition(),
                     plan.aimPoint(),
                     plan.cruiseSpeed(),
                     plan.stopAtDestination(),
                     plan.hasTarget(),
-                    this.approach,
+                    this.approach || unboostedPass,
                     this.takeoff,
-                    this.forceForward,
+                    this.forceForward && !unboostedPass,
                     this.pullOutPower,
-                    this.hoverLift,
+                    this.hoverLift || unboostedPass,
                     this.stableHover,
                     this.holdPitch,
                     this.divePitch,
+                    plan.divePitchBoost(),
                     this.pullOutPitch,
                     this.throttleThroughBrake,
                     this.sprint,
