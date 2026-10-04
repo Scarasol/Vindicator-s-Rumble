@@ -10,6 +10,16 @@ final class GroundSteering {
     private static final double RESIDUAL_MOTION_SQR = 1.0E-6D;
     private static final double TURN_BRAKE_SPEED_SQR = 0.0225D;
 
+    static boolean needsTurningRoom(VehicleController controller, Vec3 waypoint) {
+        double radius = controller.estimatedGroundTurningRadius();
+        if (radius <= 0.0D) return false;
+        double dx = waypoint.x - controller.position().x;
+        double dz = waypoint.z - controller.position().z;
+        double yaw = Math.toRadians(controller.yaw());
+        double lateral = Math.abs(dx * Math.cos(yaw) + dz * Math.sin(yaw));
+        return dx * dx + dz * dz < 2.0D * radius * lateral;
+    }
+
     static SteeringResult steerToward(VehicleController controller, Vec3 waypoint, double remainingDistanceSqr,
                                      boolean preferStableFire, int previousTurnDirection) {
         Vec3 position = controller.position();
@@ -24,15 +34,21 @@ final class GroundSteering {
         float diff = Mth.wrapDegrees(targetYaw - controller.yaw());
         VehicleMovementType type = controller.movementType();
         float turnThreshold = preferStableFire ? (type == VehicleMovementType.TRACK ? 5.0F : 8.0F) : (type == VehicleMovementType.TRACK ? 8.0F : 14.0F);
-        int turnDirection = turnDirection(diff, turnThreshold, previousTurnDirection);
-        boolean left = turnDirection < 0;
-        boolean right = turnDirection > 0;
         float absDiff = Math.abs(diff);
         double horizontalSpeedSqr = horizontalSpeedSqr(controller);
-        boolean reverse = distanceSqr < 25.0D && absDiff > 155.0F && horizontalSpeedSqr < TURN_BRAKE_SPEED_SQR;
+        double yaw = Math.toRadians(controller.yaw());
+        double longitudinalSpeed = -controller.velocity().x * Math.sin(yaw) + controller.velocity().z * Math.cos(yaw);
+        boolean backing = longitudinalSpeed < -0.01D;
+        boolean tightTurn = needsTurningRoom(controller, waypoint);
+        boolean targetBehind = absDiff > 155.0F && (type == VehicleMovementType.WHEEL || distanceSqr < 25.0D);
+        boolean reverse = (tightTurn || targetBehind) && (backing || horizontalSpeedSqr < TURN_BRAKE_SPEED_SQR);
+        int turnDirection = turnDirection(reverse && targetBehind ? Mth.wrapDegrees(diff + 180.0F) : diff,
+                turnThreshold, previousTurnDirection);
+        boolean left = reverse || backing ? turnDirection > 0 : turnDirection < 0;
+        boolean right = reverse || backing ? turnDirection < 0 : turnDirection > 0;
         float brakeAngle = preferStableFire ? 65.0F : 95.0F;
         float forwardAngle = preferStableFire ? 80.0F : 135.0F;
-        boolean brake = !reverse && absDiff > brakeAngle && horizontalSpeedSqr > TURN_BRAKE_SPEED_SQR;
+        boolean brake = !reverse && (tightTurn || absDiff > brakeAngle || backing) && horizontalSpeedSqr > TURN_BRAKE_SPEED_SQR;
         boolean forward = !reverse && !brake && (absDiff < forwardAngle || horizontalSpeedSqr < TURN_BRAKE_SPEED_SQR);
         boolean sprint = !preferStableFire && forward && !left && !right && absDiff < 18.0F && remainingDistanceSqr > 256.0D;
 

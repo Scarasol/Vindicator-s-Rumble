@@ -119,6 +119,18 @@ public class SbwVehicleController implements VehicleController {
         return this.estimatedHorizontalStoppingDistance(HOVER_RESIDUAL_LIFT_SCALE);
     }
 
+    @Override
+    public double estimatedGroundTurningRadius() {
+        if (this.vehicle.computed().getEngineType() != EngineType.WHEEL
+                || !(this.vehicle.getEngineInfo() instanceof EngineInfo.Wheel engine)) {
+            return 0.0D;
+        }
+        // SBW wheelEngine: full-lock deltaRot/rudder equilibrium after ground drag.
+        double retention = Math.max(0.1D, 0.78D - 0.25D * 0.8295D * this.velocity().horizontalDistance());
+        double rudder = Math.min(0.6D, 3.0D * engine.getSteeringSpeed() * 1.2D * retention / (1.0D - retention));
+        return 1.0D / Math.toRadians(12.0D * 0.8295D * Math.max(1.0E-4D, rudder));
+    }
+
     private double estimatedHorizontalStoppingDistance(double residualLiftScale) {
         Vec3 movement = this.vehicle.getDeltaMovement();
         double horizontalSpeed = Math.hypot(movement.x, movement.z);
@@ -293,6 +305,9 @@ public class SbwVehicleController implements VehicleController {
             this.refillVehicleEnergy();
         }
         short keys = toSbwKeys(input);
+        if (input.brake() && this.vehicle.computed().getEngineType() == EngineType.WHEEL) {
+            keys &= (short) ~(SBW_LEFT_KEY | SBW_RIGHT_KEY);
+        }
         this.vehicle.processInput(keys);
         VehicleAiLogger.debugEvery(mob, 20, "SBW processInput vehicle={} seat={} keys={} input={} velocity={} energy={}",
                 this.vehicle.getId(),

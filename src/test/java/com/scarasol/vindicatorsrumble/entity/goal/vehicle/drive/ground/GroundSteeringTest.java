@@ -22,6 +22,104 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class GroundSteeringTest {
     @Test
+    void sideWaypointInsideFullLockCircleNeedsManeuveringOnEitherSide() {
+        TestController controller = new TestController(Vec3.ZERO, 0.0F, Vec3.ZERO,
+                VehicleMovementType.WHEEL, 10.0D);
+
+        assertTrue(GroundSteering.needsTurningRoom(controller, new Vec3(10.0D, 0.0D, 0.0D)));
+        assertTrue(GroundSteering.needsTurningRoom(controller, new Vec3(-10.0D, 0.0D, 0.0D)));
+        assertFalse(GroundSteering.needsTurningRoom(controller, new Vec3(25.0D, 0.0D, 0.0D)));
+        assertFalse(GroundSteering.needsTurningRoom(controller, new Vec3(0.0D, 0.0D, 10.0D)));
+    }
+
+    @Test
+    void turningRoomUsesControllerCapabilityInsteadOfOneVehicleThreshold() {
+        Vec3 waypoint = new Vec3(25.0D, 0.0D, 0.0D);
+        assertFalse(GroundSteering.needsTurningRoom(new TestController(Vec3.ZERO, 0.0F, Vec3.ZERO,
+                VehicleMovementType.WHEEL, 10.0D), waypoint));
+        assertTrue(GroundSteering.needsTurningRoom(new TestController(Vec3.ZERO, 0.0F, Vec3.ZERO,
+                VehicleMovementType.WHEEL, 20.0D), waypoint));
+    }
+
+    @Test
+    void turningRoomIsRelativeToVehiclePositionAndWrappedHeading() {
+        TestController controller = new TestController(new Vec3(40.0D, 7.0D, 30.0D), 450.0F, Vec3.ZERO,
+                VehicleMovementType.WHEEL, 10.0D);
+
+        assertTrue(GroundSteering.needsTurningRoom(controller, new Vec3(40.0D, 7.0D, 40.0D)));
+        assertFalse(GroundSteering.needsTurningRoom(controller, new Vec3(30.0D, 7.0D, 30.0D)));
+    }
+
+    @Test
+    void vehiclesWithoutLimitedTurningRadiusKeepExistingSteering() {
+        for (VehicleMovementType type : List.of(VehicleMovementType.WHEEL, VehicleMovementType.TRACK)) {
+            TestController controller = new TestController(Vec3.ZERO, 0.0F, Vec3.ZERO, type);
+            assertFalse(GroundSteering.needsTurningRoom(controller, new Vec3(10.0D, 0.0D, 0.0D)));
+        }
+    }
+
+    @Test
+    void movingIntoUnreachableTurnBrakesBeforeReversing() {
+        TestController controller = new TestController(Vec3.ZERO, 0.0F, new Vec3(0.0D, 0.0D, 0.8D),
+                VehicleMovementType.WHEEL, 10.0D);
+        VehicleInput input = GroundSteering.steerToward(controller, new Vec3(10.0D, 0.0D, 0.0D),
+                100.0D, false, 0).input();
+
+        assertTrue(input.brake());
+        assertFalse(input.forward());
+        assertFalse(input.back());
+    }
+
+    @Test
+    void unreachableTurnReversesWithOppositeSteeringAtLowSpeed() {
+        TestController controller = new TestController(Vec3.ZERO, 0.0F, Vec3.ZERO,
+                VehicleMovementType.WHEEL, 10.0D);
+        VehicleInput rightSide = GroundSteering.steerToward(controller, new Vec3(10.0D, 0.0D, 0.0D),
+                100.0D, false, 0).input();
+        VehicleInput leftSide = GroundSteering.steerToward(controller, new Vec3(-10.0D, 0.0D, 0.0D),
+                100.0D, false, 0).input();
+
+        assertTrue(rightSide.back());
+        assertTrue(rightSide.right());
+        assertFalse(rightSide.forward());
+        assertFalse(rightSide.left());
+        assertTrue(leftSide.back());
+        assertTrue(leftSide.left());
+        assertFalse(leftSide.right());
+    }
+
+    @Test
+    void backingTurnContinuesUntilReachableThenBrakesBeforeForward() {
+        TestController controller = new TestController(Vec3.ZERO, 0.0F, new Vec3(0.0D, 0.0D, -0.3D),
+                VehicleMovementType.WHEEL, 10.0D);
+        VehicleInput inside = GroundSteering.steerToward(controller, new Vec3(10.0D, 0.0D, 0.0D),
+                100.0D, false, 0).input();
+        VehicleInput outside = GroundSteering.steerToward(controller, new Vec3(25.0D, 0.0D, 0.0D),
+                625.0D, false, 0).input();
+
+        assertTrue(inside.back());
+        assertTrue(inside.right());
+        assertFalse(inside.brake());
+        assertTrue(outside.brake());
+        assertFalse(outside.forward());
+        assertFalse(outside.back());
+    }
+
+    @Test
+    void wheelReversesStraightToWaypointBehindInsteadOfCrawlingAround() {
+        TestController controller = new TestController(Vec3.ZERO, 0.0F, Vec3.ZERO,
+                VehicleMovementType.WHEEL, 10.0D);
+        VehicleInput input = GroundSteering.steerToward(controller, new Vec3(0.0D, 0.0D, -16.0D),
+                256.0D, false, 0).input();
+
+        assertTrue(input.back());
+        assertFalse(input.forward());
+        assertFalse(input.left());
+        assertFalse(input.right());
+        assertFalse(input.brake());
+    }
+
+    @Test
     void distantDestinationAcceleratesWithShortLocalWaypointForWheelsAndTracks() {
         for (VehicleMovementType type : List.of(VehicleMovementType.WHEEL, VehicleMovementType.TRACK)) {
             TestController controller = new TestController(Vec3.ZERO, 0.0F, Vec3.ZERO, type);
@@ -165,7 +263,12 @@ class GroundSteeringTest {
     }
 
     private record TestController(Vec3 position, float yaw, Vec3 velocity,
-                                  VehicleMovementType movementType) implements VehicleController {
+                                  VehicleMovementType movementType,
+                                  double estimatedGroundTurningRadius) implements VehicleController {
+        TestController(Vec3 position, float yaw, Vec3 velocity, VehicleMovementType movementType) {
+            this(position, yaw, velocity, movementType, 0.0D);
+        }
+
         @Override
         public Entity entity() {
             return null;

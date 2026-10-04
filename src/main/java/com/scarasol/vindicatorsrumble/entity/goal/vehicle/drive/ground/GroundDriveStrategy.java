@@ -306,7 +306,6 @@ public final class GroundDriveStrategy implements DriveStrategy {
             controller.stopDriving(this.mob);
             return;
         }
-
         double remainingDistanceSqr = this.horizontalDistanceSqr(controller.position(),
                 request.intent() == DriveIntent.MOVE_TO
                         ? this.navigationTargetPosition(request).orElse(waypoint) : waypoint);
@@ -315,6 +314,16 @@ public final class GroundDriveStrategy implements DriveStrategy {
                 : GroundSteering.steerToward(controller, waypoint, remainingDistanceSqr, request.preferStableFire(), this.turnDirection);
         VehicleInput input = steering.input();
         this.turnDirection = steering.turnDirection();
+        if (input.back()) {
+            this.refreshManeuverClearance(this.lastRadarTick == 0);
+            double clearance = Math.max(MANEUVER_EXIT_CLEARANCE,
+                    controller.pathingDimensions().conservativeHorizontalSize() * 0.5D + controller.estimatedHorizontalStoppingDistance());
+            if (isRetreatInputBlocked(input, this.maneuverClearance, clearance)) {
+                this.beginManeuver(request, "turning reverse blocked");
+                this.tickManeuver(request);
+                return;
+            }
+        }
         VehicleAiLogger.debugEvery(this.mob, 20, "Drive following waypoint {} with input {}", waypoint, input);
         controller.drive(this.mob, input);
     }
@@ -959,6 +968,9 @@ public final class GroundDriveStrategy implements DriveStrategy {
     }
 
     private boolean shouldAdvancePastNode(Vec3 position, Vec3 waypoint, double passDistanceSqr) {
+        if (this.path.canReach() && this.path.getNextNodeIndex() + 1 >= this.path.getNodeCount()) {
+            return false;
+        }
         double distanceSqr = position.distanceToSqr(waypoint);
         if (distanceSqr <= passDistanceSqr) {
             return true;

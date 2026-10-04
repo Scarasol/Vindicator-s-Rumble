@@ -95,6 +95,36 @@ public final class RecruitsMovementGameTests {
         verifyGroundCruise(helper, "m_1a_2");
     }
 
+    @GameTest(batch = "recruits_movement", template = "empty", timeoutTicks = 450)
+    public static void pickupReachesShortSidewaysCommandWithoutCircling(GameTestHelper helper) {
+        verifyGroundTurn(helper, "sodayo_pick_up_hmg", 90.0F, false);
+    }
+
+    @GameTest(batch = "recruits_movement", template = "empty", timeoutTicks = 450)
+    public static void lavReachesShortSidewaysCommandWithoutCircling(GameTestHelper helper) {
+        verifyGroundTurn(helper, "lav_150", -90.0F, false);
+    }
+
+    @GameTest(batch = "recruits_movement", template = "empty", timeoutTicks = 450)
+    public static void pickupReachesCommandBehindItWithoutCircling(GameTestHelper helper) {
+        verifyGroundTurn(helper, "sodayo_pick_up_hmg", 180.0F, false);
+    }
+
+    @GameTest(batch = "recruits_movement", template = "empty", timeoutTicks = 450)
+    public static void trackedVehicleReachesShortSidewaysCommand(GameTestHelper helper) {
+        verifyGroundTurn(helper, "m_1a_2", 90.0F, false);
+    }
+
+    @GameTest(batch = "recruits_movement", template = "empty", timeoutTicks = 450)
+    public static void cruisingPickupReachesRedirectedSidewaysCommand(GameTestHelper helper) {
+        verifyGroundTurn(helper, "sodayo_pick_up_hmg", 0.0F, true);
+    }
+
+    @GameTest(batch = "recruits_movement", template = "empty", timeoutTicks = 450)
+    public static void pickupTurnsWithoutReversingIntoNearbyWall(GameTestHelper helper) {
+        verifyGroundTurn(helper, "sodayo_pick_up_hmg", 90.0F, false, true);
+    }
+
     @GameTest(batch = "recruits_movement", template = "empty", timeoutTicks = 110)
     public static void turningVehicleKeepsItsPathCache(GameTestHelper helper) {
         Fixture fixture = fixture(helper, "m_1a_2", false);
@@ -329,6 +359,64 @@ public final class RecruitsMovementGameTests {
         });
     }
 
+    private static void verifyGroundTurn(GameTestHelper helper, String type, float yaw, boolean redirect) {
+        verifyGroundTurn(helper, type, yaw, redirect, false);
+    }
+
+    private static void verifyGroundTurn(GameTestHelper helper, String type, float yaw, boolean redirect, boolean rearWall) {
+        Fixture fixture = fixture(helper, type, false, true);
+        fixture.vehicle.setYRot(yaw);
+        if (rearWall) {
+            for (int z = -10; z <= 30; z++) {
+                for (int y = 0; y <= 4; y++) {
+                    fixture.level.setBlock(fixture.origin.offset(5, y, z), Blocks.BEDROCK.defaultBlockState(), 2);
+                }
+            }
+        }
+        fixture.pointCommand(redirect ? 64 : 16);
+        Vec3[] destination = {fixture.destination(redirect ? 64 : 16)};
+        Vec3[] previous = {fixture.vehicle.position()};
+        double[] traveled = {0.0D};
+        boolean[] redirected = {!redirect};
+        helper.onEachTick(() -> {
+            fixture.observe(helper);
+            Vec3 position = fixture.vehicle.position();
+            traveled[0] += horizontalDistance(position, previous[0]);
+            previous[0] = position;
+            if (!redirected[0] && position.z >= fixture.origin.getZ() + 24.5D) {
+                helper.assertTrue(fixture.vehicle.getDeltaMovement().horizontalDistance() >= 0.3D,
+                        "Redirect fixture did not reach cruising speed");
+                fixture.pointCommand(-12, 24);
+                destination[0] = Vec3.atBottomCenterOf(fixture.origin.offset(-12, 0, 24));
+                traveled[0] = 0.0D;
+                redirected[0] = true;
+            }
+            if (!redirected[0]) return;
+            double distance = horizontalDistance(position, destination[0]);
+            var controls = SbwGameTestVehicle.flightControl(fixture.vehicle);
+            if (!type.equals("m_1a_2") && controls.up()) {
+                helper.assertFalse(controls.left() || controls.right(), "Wheel braking engaged a handbrake drift");
+            }
+            LOGGER.info("Recruit ground turn vehicle={} initialYaw={} redirect={} wall={} tick={} pos={} yaw={} distance={} traveled={} speed={} radius={} controls={}",
+                    type, yaw, redirect, rearWall, helper.getTick(), position.subtract(Vec3.atBottomCenterOf(fixture.origin)),
+                    fixture.vehicle.getYRot(), distance, traveled[0],
+                    fixture.vehicle.getDeltaMovement().horizontalDistance(),
+                    VehicleControllers.create(fixture.vehicle).orElseThrow().estimatedGroundTurningRadius(),
+                    controls);
+            helper.assertTrue(traveled[0] <= 80.0D,
+                    "Short open-ground command circled instead of arriving: traveled=" + traveled[0]);
+            if (!fixture.driver.getShouldMovePos() && fixture.driver.getFollowState() == 2) {
+                helper.assertTrue(distance <= 4.0D, "Turning command completed away from its destination");
+                helper.assertTrue(fixture.vehicle.getDeltaMovement().horizontalDistance() < 0.08D,
+                        "Turning command completed without stopping");
+                LOGGER.info("Recruit ground turn result vehicle={} initialYaw={} redirect={} wall={} arrivalTick={} distance={} traveled={}",
+                        type, yaw, redirect, rearWall, helper.getTick(), distance, traveled[0]);
+                fixture.close();
+                helper.succeed();
+            }
+        });
+    }
+
     private static void verifyFlightCruise(GameTestHelper helper, String type, boolean airborne, float yaw) {
         Fixture fixture = fixture(helper, type, airborne);
         fixture.vehicle.setYRot(yaw);
@@ -380,19 +468,23 @@ public final class RecruitsMovementGameTests {
     }
 
     private static Fixture fixture(GameTestHelper helper, String type, boolean airborne) {
+        return fixture(helper, type, airborne, false);
+    }
+
+    private static Fixture fixture(GameTestHelper helper, String type, boolean airborne, boolean turning) {
         CommonConfig.VEHICLE_AI_DEBUG.set(true);
         ServerLevel level = helper.getLevel();
         BlockPos origin = new BlockPos(512 + ARENA.getAndIncrement() * 256, 5, 512);
         List<BlockPos> chunks = new ArrayList<>();
-        for (int x = -1; x <= 1; x++) {
-            for (int z = -1; z <= 5; z++) {
+        for (int x = turning ? -3 : -1; x <= (turning ? 3 : 1); x++) {
+            for (int z = turning ? -3 : -1; z <= (turning ? 7 : 5); z++) {
                 BlockPos chunk = new BlockPos((origin.getX() >> 4) + x, 0, (origin.getZ() >> 4) + z);
                 level.setChunkForced(chunk.getX(), chunk.getZ(), true);
                 chunks.add(chunk);
             }
         }
-        for (int x = -12; x <= 12; x++) {
-            for (int z = -8; z <= 80; z++) {
+        for (int x = turning ? -40 : -12; x <= (turning ? 40 : 12); x++) {
+            for (int z = turning ? -40 : -8; z <= (turning ? 100 : 80); z++) {
                 level.setBlock(origin.offset(x, -1, z), Blocks.BEDROCK.defaultBlockState(), 2);
             }
         }
@@ -474,8 +566,16 @@ public final class RecruitsMovementGameTests {
             pointCommand(driver, z);
         }
 
+        void pointCommand(int x, int z) {
+            pointCommand(driver, Vec3.atBottomCenterOf(origin.offset(x, 0, z)));
+        }
+
         void pointCommand(AbstractRecruitEntity recruit, int z) {
-            Vec3 point = destination(z).add(0.0D, 6.0D, 0.0D);
+            pointCommand(recruit, destination(z));
+        }
+
+        void pointCommand(AbstractRecruitEntity recruit, Vec3 destination) {
+            Vec3 point = destination.add(0.0D, 6.0D, 0.0D);
             player.moveTo(point.x, point.y, point.z, 0.0F, 90.0F);
             player.setYHeadRot(0.0F);
             player.yHeadRotO = 0.0F;

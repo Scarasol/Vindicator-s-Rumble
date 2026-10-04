@@ -32,6 +32,11 @@ public interface VehicleController {
 
     double estimatedHorizontalStoppingDistance();
 
+    /** Full-lock turn radius at current speed; zero when no estimate is available. */
+    default double estimatedGroundTurningRadius() {
+        return 0.0D;
+    }
+
     default double estimatedStabilizedHorizontalStoppingDistance() {
         return this.estimatedHorizontalStoppingDistance();
     }
