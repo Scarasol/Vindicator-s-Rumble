@@ -18,6 +18,11 @@ public interface VehicleController {
 
     AABB boundingBox();
 
+    /** Horizontal footprint radius about the vehicle origin, independent of yaw when available. */
+    default double horizontalFootprintRadius() {
+        return this.pathingDimensions().conservativeHorizontalSize() * 0.5D;
+    }
+
     boolean isValid();
 
     boolean isWreck();

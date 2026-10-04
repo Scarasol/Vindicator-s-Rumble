@@ -65,9 +65,10 @@ public final class RecruitsCompat {
             if (recruit.getShouldMovePos() && recruit.getMovePos() != null) {
                 Vec3 destination = Vec3.atBottomCenterOf(recruit.getMovePos());
                 request = DriveRequest.moveTo(destination);
+                double arrivalDistance = VehicleAiTuning.navigationArrivalDistance(controller, request.desiredDistance());
                 if (!VehicleAiTuning.isValidVehicleDriveTarget(recruit, recruit.getTarget())
                         && horizontalDistanceSqr(controller.position(), destination)
-                        <= request.desiredDistance() * request.desiredDistance()
+                        <= arrivalDistance * arrivalDistance
                         && controller.velocity().multiply(1.0D, 0.0D, 1.0D).lengthSqr() < 0.0064D) {
                     recruit.setShouldMovePos(false);
                     recruit.clearMovePos();

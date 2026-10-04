@@ -1,5 +1,6 @@
 package com.scarasol.vindicatorsrumble.util;
 
+import com.scarasol.vindicatorsrumble.api.vehicle.VehicleController;
 import com.scarasol.vindicatorsrumble.compat.VehicleControllers;
 import com.scarasol.vindicatorsrumble.init.ModTags;
 import net.minecraft.util.Mth;
@@ -15,6 +16,12 @@ public class VehicleAiTuning {
     private static final double MIN_EFFECTIVE_FOLLOW_RANGE = 1.0E-4D;
 
     private VehicleAiTuning() {
+    }
+
+    public static double navigationArrivalDistance(VehicleController controller, double requestedDistance) {
+        return controller.usesGroundNavigation() && requestedDistance > 0.0D
+                ? Math.max(requestedDistance, controller.horizontalFootprintRadius() + 1.0D)
+                : requestedDistance;
     }
 
     public static double chaseDistance(Mob mob) {

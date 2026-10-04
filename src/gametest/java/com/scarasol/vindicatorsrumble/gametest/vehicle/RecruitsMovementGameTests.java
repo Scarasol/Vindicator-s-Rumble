@@ -158,6 +158,110 @@ public final class RecruitsMovementGameTests {
         });
     }
 
+    @GameTest(batch = "recruits_movement", template = "empty", timeoutTicks = 180)
+    public static void pickupCompletesNearbyCommandWithoutTurning(GameTestHelper helper) {
+        verifyNearbyGroundArrival(helper, "sodayo_pick_up_hmg", 5);
+    }
+
+    @GameTest(batch = "recruits_movement", template = "empty", timeoutTicks = 180)
+    public static void tankCompletesNearbyCommandWithoutPivoting(GameTestHelper helper) {
+        verifyNearbyGroundArrival(helper, "m_1a_2", 6);
+    }
+
+    @GameTest(batch = "recruits_movement", template = "empty", timeoutTicks = 180)
+    public static void groundHoldIgnoresPassengerHeightAndStaysStill(GameTestHelper helper) {
+        Fixture fixture = fixture(helper, "m_1a_2", false);
+        helper.startSequence().thenWaitUntil(() -> {
+            helper.assertTrue(fixture.driver.tickCount > 0, "Hold fixture is not ticking");
+        }).thenExecute(() -> {
+            CommandEvents.onMovementCommand(fixture.player, List.of(fixture.driver), 2, 0);
+            fixture.driver.setHoldPos(fixture.vehicle.position().add(3.0D, 5.0D, 0.0D));
+            Vec3 start = fixture.vehicle.position();
+            float yaw = fixture.vehicle.getYRot();
+            helper.runAfterDelay(80, () -> {
+                helper.assertTrue(horizontalDistance(start, fixture.vehicle.position()) < 0.5D,
+                        "Passenger/hold height difference restarted ground movement");
+                helper.assertTrue(Math.abs(net.minecraft.util.Mth.wrapDegrees(fixture.vehicle.getYRot() - yaw)) < 2.0F,
+                        "Parked hold vehicle pivoted toward its destination");
+                fixture.close();
+                helper.succeed();
+            });
+        });
+    }
+
+    @GameTest(batch = "recruits_movement", template = "empty", timeoutTicks = 480)
+    public static void pickupAndTankSettleAtNeighboringCommandPoints(GameTestHelper helper) {
+        Fixture fixture = fixture(helper, "sodayo_pick_up_hmg", false, true);
+        Entity tank = create(fixture.level, "superbwarfare", "m_1a_2");
+        tank.setInvulnerable(true);
+        tank.setPos(Vec3.atBottomCenterOf(fixture.origin.offset(12, 0, 0)));
+        tank.setYRot(20.0F);
+        fixture.level.addFreshEntity(tank);
+        AbstractRecruitEntity secondDriver = fixture.recruit();
+        helper.assertTrue(secondDriver.startRiding(tank, true), "Second driver could not mount");
+        helper.assertTrue(VehicleControllers.create(tank).orElseThrow().canDrive(secondDriver),
+                "Second recruit did not get the tank driver seat");
+        fixture.vehicle.setPos(Vec3.atBottomCenterOf(fixture.origin.offset(-12, 0, 0)));
+        fixture.vehicle.setYRot(-20.0F);
+        Vec3 pickupDestination = Vec3.atBottomCenterOf(fixture.origin.offset(-1, 0, 32));
+        Vec3 tankDestination = Vec3.atBottomCenterOf(fixture.origin.offset(1, 0, 32));
+        long[] commandTick = {-1};
+        long[] arrivalTick = {-1};
+        Vec3[] parked = new Vec3[2];
+        float[] parkedYaw = new float[2];
+        Vec3[] previous = {fixture.vehicle.position(), tank.position()};
+        double[] traveled = {0.0D, 0.0D};
+        helper.startSequence().thenWaitUntil(() -> {
+            helper.assertTrue(fixture.driver.tickCount > 0 && secondDriver.tickCount > 0,
+                    "Convoy fixture is not ticking");
+        }).thenExecute(() -> {
+            fixture.pointCommand(fixture.driver, pickupDestination);
+            fixture.pointCommand(secondDriver, tankDestination);
+            commandTick[0] = helper.getTick();
+        });
+        helper.onEachTick(() -> {
+            if (commandTick[0] < 0) return;
+            Entity[] vehicles = {fixture.vehicle, tank};
+            for (int i = 0; i < vehicles.length; i++) {
+                traveled[i] += horizontalDistance(previous[i], vehicles[i].position());
+                previous[i] = vehicles[i].position();
+                helper.assertTrue(vehicles[i].isAlive(), "Convoy lost a vehicle");
+                helper.assertTrue(traveled[i] < 75.0D, "Convoy kept maneuvering around its arrival area");
+            }
+            helper.assertTrue(fixture.driver.isPassenger() && secondDriver.isPassenger(),
+                    "Convoy lost a driver");
+            if (fixture.driver.getShouldMovePos() || secondDriver.getShouldMovePos()) return;
+            if (arrivalTick[0] < 0) {
+                arrivalTick[0] = helper.getTick();
+                helper.assertTrue(horizontalDistance(fixture.vehicle.position(), pickupDestination) <= 6.0D,
+                        "Pickup completed too far from its command point");
+                helper.assertTrue(horizontalDistance(tank.position(), tankDestination) <= 8.0D,
+                        "Tank completed too far from its command point");
+                for (int i = 0; i < vehicles.length; i++) {
+                    parked[i] = vehicles[i].position();
+                    parkedYaw[i] = vehicles[i].getYRot();
+                }
+            }
+            if (helper.getTick() - arrivalTick[0] < 100) return;
+            for (int i = 0; i < vehicles.length; i++) {
+                helper.assertTrue(horizontalDistance(parked[i], vehicles[i].position()) < 1.0D,
+                        "Arrived convoy vehicle resumed pushing toward the point");
+                helper.assertTrue(Math.abs(net.minecraft.util.Mth.wrapDegrees(vehicles[i].getYRot() - parkedYaw[i])) < 3.0F,
+                        "Arrived convoy vehicle kept turning");
+                helper.assertTrue(vehicles[i].getDeltaMovement().horizontalDistance() < 0.08D,
+                        "Convoy did not settle");
+                LOGGER.info("Recruit convoy result vehicle={} arrivalTick={} traveled={} distance={} settledDrift={} yawChange={}",
+                        vehicles[i].getType(), arrivalTick[0], traveled[i],
+                        horizontalDistance(vehicles[i].position(), i == 0 ? pickupDestination : tankDestination),
+                        horizontalDistance(parked[i], vehicles[i].position()),
+                        net.minecraft.util.Mth.wrapDegrees(vehicles[i].getYRot() - parkedYaw[i]));
+            }
+            tank.discard();
+            fixture.close();
+            helper.succeed();
+        });
+    }
+
     @GameTest(batch = "recruits_movement", template = "empty", timeoutTicks = 600)
     public static void followingReadsMovingOwnerAndCancelStopsFlight(GameTestHelper helper) {
         Fixture fixture = fixture(helper, "ah_6", true);
@@ -350,7 +454,8 @@ public final class RecruitsMovementGameTests {
                         "Open-ground command crawled instead of cruising: averageSpeed=" + averageSpeed);
                 helper.assertTrue(abruptSlowdowns[0] == 0,
                         "Open-ground command repeatedly braked during cruise: slowdowns=" + abruptSlowdowns[0]);
-                helper.assertTrue(horizontalDistance(fixture.vehicle.position(), fixture.destination(64)) <= 4.0D,
+                helper.assertTrue(horizontalDistance(fixture.vehicle.position(), fixture.destination(64))
+                                <= (type.equals("m_1a_2") ? 8.0D : 6.0D),
                         "Ground cruise overshot the command point");
                 helper.assertTrue(speed < 0.08D, "Ground command completed without stopping");
                 fixture.close();
@@ -406,7 +511,8 @@ public final class RecruitsMovementGameTests {
             helper.assertTrue(traveled[0] <= 80.0D,
                     "Short open-ground command circled instead of arriving: traveled=" + traveled[0]);
             if (!fixture.driver.getShouldMovePos() && fixture.driver.getFollowState() == 2) {
-                helper.assertTrue(distance <= 4.0D, "Turning command completed away from its destination");
+                helper.assertTrue(distance <= (type.equals("m_1a_2") ? 8.0D : 6.0D),
+                        "Turning command completed away from its destination");
                 helper.assertTrue(fixture.vehicle.getDeltaMovement().horizontalDistance() < 0.08D,
                         "Turning command completed without stopping");
                 LOGGER.info("Recruit ground turn result vehicle={} initialYaw={} redirect={} wall={} arrivalTick={} distance={} traveled={}",
@@ -464,6 +570,37 @@ public final class RecruitsMovementGameTests {
                 fixture.close();
                 helper.succeed();
             }
+        });
+    }
+
+    private static void verifyNearbyGroundArrival(GameTestHelper helper, String type, int offset) {
+        Fixture fixture = fixture(helper, type, false);
+        helper.startSequence().thenWaitUntil(() -> {
+            helper.assertTrue(fixture.driver.tickCount > 0, "Arrival fixture is not ticking");
+        }).thenExecute(() -> {
+            Vec3 start = fixture.vehicle.position();
+            float yaw = fixture.vehicle.getYRot();
+            VehicleController controller = VehicleControllers.create(fixture.vehicle).orElseThrow();
+            double radius = controller.horizontalFootprintRadius();
+            for (float angle : new float[]{45.0F, 90.0F, 180.0F}) {
+                fixture.vehicle.setYRot(angle);
+                helper.assertTrue(Math.abs(controller.horizontalFootprintRadius() - radius) < 1.0E-6D,
+                        "Ground footprint changed with vehicle heading");
+            }
+            fixture.vehicle.setYRot(yaw);
+            fixture.pointCommand(offset, 0);
+            helper.runAfterDelay(80, () -> {
+                helper.assertFalse(fixture.driver.getShouldMovePos(), "Nearby command never completed");
+                helper.assertTrue(horizontalDistance(start, fixture.vehicle.position()) < 0.5D,
+                        "Arrived vehicle moved just to face its command point");
+                helper.assertTrue(Math.abs(net.minecraft.util.Mth.wrapDegrees(fixture.vehicle.getYRot() - yaw)) < 2.0F,
+                        "Arrived vehicle kept turning toward its command point");
+                LOGGER.info("Recruit nearby arrival vehicle={} offset={} footprintRadius={} drift={} yawChange={}",
+                        type, offset, radius, horizontalDistance(start, fixture.vehicle.position()),
+                        net.minecraft.util.Mth.wrapDegrees(fixture.vehicle.getYRot() - yaw));
+                fixture.close();
+                helper.succeed();
+            });
         });
     }
 

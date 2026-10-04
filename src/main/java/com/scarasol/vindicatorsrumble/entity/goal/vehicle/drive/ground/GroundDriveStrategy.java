@@ -188,6 +188,22 @@ public final class GroundDriveStrategy implements DriveStrategy {
             this.brakingChaseBand = false;
         }
 
+        if (this.mode == DriveVehicleGoal.Mode.NAVIGATION && this.state != State.RECOVER
+                && this.isWithinDesiredDistance(request)) {
+            VehicleInput brakeInput = GroundSteering.brake(controller);
+            controller.drive(this.mob, brakeInput);
+            this.path = null;
+            this.state = State.IDLE;
+            this.stuckTicks = 0;
+            this.turnDirection = 0;
+            VehicleAiLogger.debugEvery(this.mob, 20, "Navigation arrival braking radius={} input={} velocity={}",
+                    VehicleAiTuning.navigationArrivalDistance(controller, request.desiredDistance()), brakeInput, controller.velocity());
+            if (brakeInput.equals(VehicleInput.NONE)) {
+                VehicleAiMemory.clearNavigationDriveRequest(this.mob);
+            }
+            return;
+        }
+
         this.updateStuckState(request);
         if (this.state == State.MANEUVER) {
             this.tickManeuver(request);
@@ -250,8 +266,8 @@ public final class GroundDriveStrategy implements DriveStrategy {
             return;
         }
 
-        if (this.isWithinDesiredDistance(request)) {
-            if (isTargetDistanceIntent(request.intent()) || this.mode == DriveVehicleGoal.Mode.NAVIGATION) {
+        if (this.mode == DriveVehicleGoal.Mode.COMBAT && this.isWithinDesiredDistance(request)) {
+            if (isTargetDistanceIntent(request.intent())) {
                 VehicleInput brakeInput = this.activeBrakeInput(request);
                 if (!brakeInput.equals(VehicleInput.NONE)) {
                     VehicleAiLogger.debugEvery(this.mob, 10, "Drive active braking: within desired distance {} input={} velocity={}",
@@ -267,9 +283,6 @@ public final class GroundDriveStrategy implements DriveStrategy {
             VehicleAiLogger.debugEvery(this.mob, 20, "Drive stopping: within desired distance {}", request.desiredDistance());
             controller.stopDriving(this.mob);
             this.path = null;
-            if (this.mode == DriveVehicleGoal.Mode.NAVIGATION) {
-                VehicleAiMemory.clearNavigationDriveRequest(this.mob);
-            }
             return;
         }
 
@@ -745,7 +758,11 @@ public final class GroundDriveStrategy implements DriveStrategy {
         }
         double desiredDistance = request.desiredDistance();
         if (this.mode == DriveVehicleGoal.Mode.NAVIGATION) {
-            desiredDistance += this.controller.estimatedHorizontalStoppingDistance();
+            double distance = VehicleAiTuning.navigationArrivalDistance(this.controller, desiredDistance)
+                    + this.controller.estimatedHorizontalStoppingDistance();
+            return this.navigationTargetPosition(request)
+                    .map(position -> this.horizontalDistanceSqr(this.controller.position(), position) <= distance * distance)
+                    .orElse(false);
         }
         double desiredDistanceSqr = desiredDistance * desiredDistance;
         if (request.targetEntity().isPresent()) {
@@ -1449,7 +1466,7 @@ public final class GroundDriveStrategy implements DriveStrategy {
         }
         double minDistance = CommonConfig.VEHICLE_NAVIGATION_MIN_DISTANCE.get();
         if (request.path().isEmpty()) {
-            minDistance = Math.min(minDistance, request.desiredDistance());
+            minDistance = Math.min(minDistance, VehicleAiTuning.navigationArrivalDistance(this.controller, request.desiredDistance()));
         }
         if (minDistance <= 0.0D) {
             return true;
@@ -1458,7 +1475,7 @@ public final class GroundDriveStrategy implements DriveStrategy {
         if (targetPosition.isEmpty()) {
             return false;
         }
-        return this.controller.position().distanceToSqr(targetPosition.get()) >= minDistance * minDistance;
+        return this.horizontalDistanceSqr(this.controller.position(), targetPosition.get()) > minDistance * minDistance;
     }
 
     private Optional<Vec3> navigationTargetPosition(DriveRequest request) {

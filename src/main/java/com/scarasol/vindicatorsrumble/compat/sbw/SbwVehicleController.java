@@ -80,6 +80,14 @@ public class SbwVehicleController implements VehicleController {
     }
 
     @Override
+    public double horizontalFootprintRadius() {
+        var collision = this.vehicle.getCollisionOBBInfo();
+        return collision == null ? VehicleController.super.horizontalFootprintRadius()
+                : Math.hypot(collision.getSize().x, collision.getSize().z)
+                + Math.hypot(collision.getPosition().x, collision.getPosition().z);
+    }
+
+    @Override
     public boolean isValid() {
         return !this.vehicle.isRemoved() && this.vehicle.isAlive();
     }
