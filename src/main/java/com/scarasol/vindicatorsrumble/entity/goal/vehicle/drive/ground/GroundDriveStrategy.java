@@ -17,6 +17,7 @@ import com.scarasol.vindicatorsrumble.util.VehicleAiMemory;
 import com.scarasol.vindicatorsrumble.util.VehicleAiTuning;
 import com.scarasol.vindicatorsrumble.util.VehiclePathContext;
 import net.minecraft.core.BlockPos;
+import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
@@ -2022,7 +2023,9 @@ public final class GroundDriveStrategy implements DriveStrategy {
             }
             if (this.intent != other.intent
                     || this.targetEntityId != other.targetEntityId
-                    || !this.dimensions.equals(other.dimensions)
+                    || Mth.ceil(this.dimensions.conservativeHorizontalSize())
+                    != Mth.ceil(other.dimensions.conservativeHorizontalSize())
+                    || Mth.ceil(this.dimensions.height()) != Mth.ceil(other.dimensions.height())
                     || this.providedPathIdentity != other.providedPathIdentity) {
                 return true;
             }

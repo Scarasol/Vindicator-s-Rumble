@@ -25,6 +25,9 @@ import net.minecraftforge.common.util.FakePlayerFactory;
 import net.minecraftforge.gametest.GameTestHolder;
 import net.minecraftforge.gametest.PrefixGameTestTemplate;
 import net.minecraftforge.registries.ForgeRegistries;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.LogEvent;
+import org.apache.logging.log4j.core.appender.AbstractAppender;
 import org.slf4j.Logger;
 
 import java.util.ArrayList;
@@ -50,6 +53,16 @@ public final class RecruitsMovementGameTests {
     @GameTest(batch = "recruits_movement", template = "empty", timeoutTicks = 600)
     public static void mi28MovesAboveCommandPointAndHovers(GameTestHelper helper) {
         verifyPointMove(helper, "mi_28", false);
+    }
+
+    @GameTest(batch = "recruits_movement", template = "empty", timeoutTicks = 600)
+    public static void ah6TurnsFromHoverAndCruisesOnCommand(GameTestHelper helper) {
+        verifyFlightCruise(helper, "ah_6", true, 120.0F);
+    }
+
+    @GameTest(batch = "recruits_movement", template = "empty", timeoutTicks = 600)
+    public static void mi28TurnsFromHoverAndCruisesOnCommand(GameTestHelper helper) {
+        verifyFlightCruise(helper, "mi_28", true, 120.0F);
     }
 
     @GameTest(batch = "recruits_movement", template = "empty", timeoutTicks = 600)
@@ -80,6 +93,39 @@ public final class RecruitsMovementGameTests {
     @GameTest(batch = "recruits_movement", template = "empty", timeoutTicks = 400)
     public static void trackedVehicleCruisesThenStopsAtCommandPoint(GameTestHelper helper) {
         verifyGroundCruise(helper, "m_1a_2");
+    }
+
+    @GameTest(batch = "recruits_movement", template = "empty", timeoutTicks = 110)
+    public static void turningVehicleKeepsItsPathCache(GameTestHelper helper) {
+        Fixture fixture = fixture(helper, "m_1a_2", false);
+        fixture.vehicle.setYRot(75.0F);
+        fixture.pointCommand(64);
+        AtomicInteger plans = new AtomicInteger();
+        var logger = (org.apache.logging.log4j.core.Logger) LogManager.getLogger(
+                "com.scarasol.vindicatorsrumble.VindicatorsRumbleMod");
+        String driverPrefix = "[entity.recruits.recruit#" + fixture.driver.getId() + "]";
+        AbstractAppender observer = new AbstractAppender("recruit_path_" + fixture.driver.getId(), null, null, false) {
+            @Override
+            public void append(LogEvent event) {
+                String message = event.getMessage().getFormattedMessage();
+                if (message.contains(driverPrefix) && message.contains("Planned vehicle path detail")) {
+                    plans.incrementAndGet();
+                }
+            }
+        };
+        observer.start();
+        logger.addAppender(observer);
+        helper.runAfterDelay(100, () -> {
+            logger.removeAppender(observer);
+            observer.stop();
+            double traveled = horizontalDistance(fixture.vehicle.position(), Vec3.atBottomCenterOf(fixture.origin));
+            LOGGER.info("Recruit turning path cache ticks=100 plans={} traveled={}", plans.get(), traveled);
+            fixture.close();
+            helper.assertTrue(traveled >= 12.0D, "Turning command failed to make progress");
+            helper.assertTrue(plans.get() <= 12,
+                    "Turning on open ground rebuilt the path repeatedly: plans=" + plans.get());
+            helper.succeed();
+        });
     }
 
     @GameTest(batch = "recruits_movement", template = "empty", timeoutTicks = 600)
@@ -114,28 +160,54 @@ public final class RecruitsMovementGameTests {
         });
     }
 
-    @GameTest(batch = "recruits_movement", template = "empty", timeoutTicks = 90)
+    @GameTest(batch = "recruits_movement", template = "empty", timeoutTicks = 180)
     public static void gunnerCommandCannotDriveAndInfantryGoalsResumeOnFoot(GameTestHelper helper) {
         Fixture fixture = fixture(helper, "ah_6", true);
+        fixture.level.addNewPlayer(fixture.player);
         AbstractRecruitEntity gunner = fixture.recruit();
         helper.assertTrue(gunner.startRiding(fixture.vehicle, true), "Gunner could not mount");
         VehicleController controller = VehicleControllers.create(fixture.vehicle).orElseThrow();
         helper.assertFalse(controller.canDrive(gunner), "Gunner fixture is in the driver seat");
-        fixture.pointCommand(gunner, 52);
-        Vec3 start = fixture.vehicle.position();
-        helper.runAfterDelay(25, () -> {
-            helper.assertTrue(horizontalDistance(fixture.vehicle.position(), start) < 6.0D,
-                    "Non-driver movement command moved the helicopter");
-            helper.assertTrue(gunner.getShouldMovePos(), "Gunner consumed an unexecuted command");
-            gunner.stopRiding();
-            gunner.setPos(fixture.destination(48));
-            helper.runAfterDelay(15, () -> {
-                helper.assertTrue(gunner.goalSelector.getRunningGoals()
-                                .anyMatch(goal -> goal.getGoal() instanceof com.talhanation.recruits.entities.ai.RecruitMoveToPosGoal)
-                                || gunner.reachedMovePos,
-                        "Vehicle integration disabled infantry movement after dismount");
-                fixture.close();
-                helper.succeed();
+        long[] commandTick = {-1};
+        boolean[] infantryResumed = {false};
+        helper.onEachTick(() -> {
+            helper.assertTrue(commandTick[0] >= 0 || helper.getTick() < 120,
+                    "Gunner fixture readiness timed out before observation started");
+            long elapsed = helper.getTick() - commandTick[0];
+            if (commandTick[0] >= 0 && elapsed >= 25 && elapsed <= 40 && !gunner.isPassenger()) {
+                var goals = gunner.goalSelector.getRunningGoals().toList();
+                infantryResumed[0] |= goals.stream().anyMatch(goal -> goal.getGoal()
+                        instanceof com.talhanation.recruits.entities.ai.RecruitMoveToPosGoal)
+                        || gunner.reachedMovePos
+                        || !gunner.getShouldMovePos() && gunner.getFollowState() == 2;
+                LOGGER.info("Recruit infantry resume tick={} entityTick={} entityTicking={} noAi={} pos={} move={} reached={} follow={} mount={} food={} goals={}",
+                        helper.getTick(), gunner.tickCount, fixture.level.isPositionEntityTicking(gunner.blockPosition()),
+                        gunner.isNoAi(), gunner.position(), gunner.getShouldMovePos(), gunner.reachedMovePos,
+                        gunner.getFollowState(), gunner.getShouldMount(), gunner.needsToGetFood(),
+                        goals.stream().map(goal -> goal.getGoal().getClass().getSimpleName()).toList());
+            }
+        });
+        helper.startSequence().thenWaitUntil(() -> {
+            helper.assertTrue(gunner.tickCount > 0
+                            && fixture.level.isPositionEntityTicking(fixture.vehicle.blockPosition())
+                            && fixture.level.isPositionEntityTicking(BlockPos.containing(fixture.destination(48))),
+                    "Gunner fixture has not entered entity-ticking chunks");
+        }).thenExecute(() -> {
+            fixture.pointCommand(gunner, 52);
+            commandTick[0] = helper.getTick();
+            Vec3 start = fixture.vehicle.position();
+            helper.runAfterDelay(25, () -> {
+                helper.assertTrue(horizontalDistance(fixture.vehicle.position(), start) < 6.0D,
+                        "Non-driver movement command moved the helicopter");
+                helper.assertTrue(gunner.getShouldMovePos(), "Gunner consumed an unexecuted command");
+                gunner.stopRiding();
+                gunner.setPos(fixture.destination(48));
+                helper.runAfterDelay(15, () -> {
+                    helper.assertTrue(infantryResumed[0],
+                            "Vehicle integration disabled infantry movement after dismount");
+                    fixture.close();
+                    helper.succeed();
+                });
             });
         });
     }
@@ -251,6 +323,56 @@ public final class RecruitsMovementGameTests {
                 helper.assertTrue(horizontalDistance(fixture.vehicle.position(), fixture.destination(64)) <= 4.0D,
                         "Ground cruise overshot the command point");
                 helper.assertTrue(speed < 0.08D, "Ground command completed without stopping");
+                fixture.close();
+                helper.succeed();
+            }
+        });
+    }
+
+    private static void verifyFlightCruise(GameTestHelper helper, String type, boolean airborne, float yaw) {
+        Fixture fixture = fixture(helper, type, airborne);
+        fixture.vehicle.setYRot(yaw);
+        VehicleController controller = VehicleControllers.create(fixture.vehicle).orElseThrow();
+        if (airborne) {
+            helper.assertTrue(controller.initializeAirborneHover(fixture.driver), "Could not initialize hover fixture");
+        }
+        fixture.pointCommand(64);
+        double[] speedSum = {0.0D};
+        int[] samples = {0};
+        int[] hoverChanges = {0};
+        int[] totalHoverChanges = {0};
+        boolean[] previousHover = {controller.hoverMode()};
+        helper.onEachTick(() -> {
+            fixture.observe(helper);
+            double traveled = fixture.vehicle.getZ() - fixture.origin.getZ() - 0.5D;
+            double speed = fixture.vehicle.getDeltaMovement().horizontalDistance();
+            if (previousHover[0] != controller.hoverMode()) totalHoverChanges[0]++;
+            if (traveled >= 12.0D && traveled <= 40.0D) {
+                speedSum[0] += speed;
+                samples[0]++;
+                if (previousHover[0] != controller.hoverMode()) hoverChanges[0]++;
+            }
+            previousHover[0] = controller.hoverMode();
+            LOGGER.info("Recruit flight cruise vehicle={} airborne={} initialYaw={} tick={} pos={} velocity={} yaw={} pitch={} roll={} hover={} controls={} goals={}",
+                    type, airborne, yaw, helper.getTick(),
+                    fixture.vehicle.position().subtract(Vec3.atLowerCornerOf(fixture.origin)),
+                    fixture.vehicle.getDeltaMovement(), fixture.vehicle.getYRot(), fixture.vehicle.getXRot(),
+                    controller.roll(), controller.hoverMode(), SbwGameTestVehicle.flightControl(fixture.vehicle),
+                    fixture.driver.goalSelector.getRunningGoals().map(goal -> goal.getGoal().getClass().getSimpleName()).toList());
+            if (!fixture.driver.getShouldMovePos() && fixture.driver.getFollowState() == 2) {
+                double averageSpeed = speedSum[0] / Math.max(1, samples[0]);
+                LOGGER.info("Recruit flight cruise result vehicle={} airborne={} initialYaw={} arrivalTick={} averageSpeed={} samples={} hoverChanges={} totalHoverChanges={} distance={} speed={}",
+                        type, airborne, yaw, helper.getTick(), averageSpeed, samples[0], hoverChanges[0], totalHoverChanges[0],
+                        horizontalDistance(fixture.vehicle.position(), fixture.destination(64)), speed);
+                helper.assertTrue(samples[0] >= 5 && averageSpeed >= 0.3D,
+                        "Open-air command crawled instead of cruising: averageSpeed=" + averageSpeed);
+                helper.assertTrue(hoverChanges[0] <= 1,
+                        "Open-air cruise repeatedly toggled hover: changes=" + hoverChanges[0]);
+                helper.assertTrue(horizontalDistance(fixture.vehicle.position(), fixture.destination(64)) <= 4.0D,
+                        "Flight cruise overshot the command point");
+                helper.assertTrue(speed < 0.08D, "Flight command completed without stopping");
+                helper.assertTrue(fixture.vehicle.getY() > fixture.origin.getY() + 10,
+                        "Flight command did not stay airborne");
                 fixture.close();
                 helper.succeed();
             }

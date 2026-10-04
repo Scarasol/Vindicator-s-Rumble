@@ -113,6 +113,37 @@ class GroundDriveStrategyTest {
     }
 
     @Test
+    void collisionBoxRoundoffDoesNotInvalidateTheRoute() {
+        var previous = new GroundDriveStrategy.PathPlanKey(DriveIntent.MOVE_TO, -1, BlockPos.ZERO,
+                Vec3.ZERO, new VehicleDimensions(4.319649677552661D, 2.2602501314165693D, 7.2270238233546D), 0);
+        var next = new GroundDriveStrategy.PathPlanKey(DriveIntent.MOVE_TO, -1, BlockPos.ZERO,
+                Vec3.ZERO, new VehicleDimensions(4.31964967741942D, 2.26025003930085D, 7.227025280344662D), 0);
+
+        assertFalse(GroundDriveStrategy.shouldReplanPath(previous, next, 19, true));
+    }
+
+    @Test
+    void turningWithinTheSameNavigationFootprintKeepsTheRoute() {
+        var previous = key(DriveIntent.MOVE_TO, -1, Vec3.ZERO, 0);
+        var next = new GroundDriveStrategy.PathPlanKey(DriveIntent.MOVE_TO, -1, BlockPos.ZERO,
+                Vec3.ZERO, new VehicleDimensions(4.0D, 2.0D, 4.0D), 0);
+
+        assertFalse(GroundDriveStrategy.shouldReplanPath(previous, next, 19, true));
+    }
+
+    @Test
+    void largerNavigationFootprintImmediatelyReplans() {
+        var previous = key(DriveIntent.MOVE_TO, -1, Vec3.ZERO, 0);
+        for (VehicleDimensions dimensions : new VehicleDimensions[]{
+                new VehicleDimensions(4.0D, 2.0D, 5.0D),
+                new VehicleDimensions(3.0D, 2.1D, 5.0D)}) {
+            var next = new GroundDriveStrategy.PathPlanKey(DriveIntent.MOVE_TO, -1, BlockPos.ZERO,
+                    Vec3.ZERO, dimensions, 0);
+            assertTrue(GroundDriveStrategy.shouldReplanPath(previous, next, 19, true));
+        }
+    }
+
+    @Test
     void chaseClosingStartsOutsideOuterBandAndContinuesUntilInnerBand() {
         boolean closing = false;
         assertFalse(shouldClose(START_DISTANCE, closing));
