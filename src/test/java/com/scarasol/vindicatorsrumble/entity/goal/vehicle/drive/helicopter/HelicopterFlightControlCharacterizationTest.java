@@ -135,6 +135,37 @@ class HelicopterFlightControlCharacterizationTest {
     }
 
     @Test
+    void cruiseDoesNotReapplyLiftAboveDesiredHeightEvenBelowTrimPower() {
+        Vec3 position = new Vec3(0.0D, 40.0D, 0.0D);
+        for (HelicopterFlightPlanner.Phase phase : new HelicopterFlightPlanner.Phase[]{
+                HelicopterFlightPlanner.Phase.APPROACH, HelicopterFlightPlanner.Phase.EVASIVE_PASS,
+                HelicopterFlightPlanner.Phase.ATTACK_RUN, HelicopterFlightPlanner.Phase.DIVE_PASS}) {
+            HelicopterFlightPlanner.Plan cruise = plan(
+                    new Vec3(80.0D, 32.0D, 0.0D), new Vec3(40.0D, 38.0D, 0.0D),
+                    1.0D, false, true, phase).withEnvironment(HelicopterEnvironment.NONE, 0.0D);
+            for (float power : new float[]{0.04F, 0.07F}) {
+                VehicleFlightInput output = new HelicopterFlightControl().command(
+                        state(position, new Vec3(0.4D, 0.15D, 0.0D), -90.0F, 0.0F, 0.0F,
+                                false, true, power, 40.0D), cruise.flightRequest(), HelicopterEnvironment.NONE);
+                assertFalse(output.input().forward(), phase + " power=" + power);
+                VehicleFlightInput emergency = new HelicopterFlightControl().command(
+                        state(position, new Vec3(0.4D, 0.15D, 0.0D), -90.0F, 0.0F, 0.0F,
+                                false, true, power, 6.0D), cruise.flightRequest(), HelicopterEnvironment.NONE);
+                assertTrue(emergency.input().forward(), phase.name());
+            }
+            if (phase == HelicopterFlightPlanner.Phase.ATTACK_RUN
+                    || phase == HelicopterFlightPlanner.Phase.DIVE_PASS) {
+                VehicleFlightInput groundDive = new HelicopterFlightControl().command(
+                        state(position, new Vec3(0.4D, 0.15D, 0.0D), -90.0F, 0.0F, 0.0F,
+                                false, true, 0.07F, 40.0D),
+                        cruise.withEnvironment(HelicopterEnvironment.NONE, 38.0D).flightRequest(),
+                        HelicopterEnvironment.NONE);
+                assertTrue(groundDive.input().forward(), phase.name());
+            }
+        }
+    }
+
+    @Test
     void groundPassRetainsTheExistingSteepDiveProfile() {
         Vec3 position = new Vec3(0.0D, 40.0D, 0.0D);
         Vec3 aimPoint = new Vec3(40.0D, 0.0D, 0.0D);

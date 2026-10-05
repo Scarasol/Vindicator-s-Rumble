@@ -5,6 +5,7 @@ import com.atsuishio.superbwarfare.data.gun.GunProp;
 import com.atsuishio.superbwarfare.entity.projectile.IglaMissileEntity;
 import com.atsuishio.superbwarfare.entity.projectile.MissileProjectile;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.phys.Vec3;
@@ -118,6 +119,18 @@ public final class SbwGameTestVehicle {
         vehicle.setRightWheelHealth(vehicle.getRightWheelMaxHealth());
         vehicle.setMainEngineHealth(vehicle.getMainEngineMaxHealth());
         vehicle.setSubEngineHealth(vehicle.getSubEngineMaxHealth());
+    }
+
+    public static void prepareStationaryAirborneTarget(Entity entity) {
+        increaseCombatFixtureDurability(entity);
+        VehicleEntity vehicle = (VehicleEntity) entity;
+        JsonObject properties = JsonParser.parseString(vehicle.getOverride()).getAsJsonObject();
+        properties.addProperty("Gravity", 0.0D);
+        vehicle.setOverride(properties.toString());
+        vehicle.setEngineStart(false);
+        vehicle.setEngineStartOver(false);
+        vehicle.setPower(0.0F);
+        vehicle.setDeltaMovement(Vec3.ZERO);
     }
 
     public static boolean movePassengerToSeat(Entity entity, Entity passenger, int seat) {

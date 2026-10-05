@@ -34,7 +34,7 @@ public final class HelicopterFlightPlanner {
     private static final double MOVEMENT_LOOKAHEAD_TICKS = 8.0D;
     private static final double[] PASS_EXIT_ANGLES = {0.0D, -7.0D, 7.0D};
     private static final double[] RETREAT_ANGLES = {0.0D, -45.0D, 45.0D, -90.0D, 90.0D};
-    private static final double[] EVASION_ANGLES = {45.0D, -45.0D, 90.0D, -90.0D, 0.0D};
+    private static final double[] EVASION_ANGLES = {70.0D, -70.0D, 90.0D, -90.0D, 110.0D, -110.0D};
 
     private final HelicopterEnvironmentProbe environmentProbe = new HelicopterEnvironmentProbe();
     private final HelicopterVisibilityRecovery visibilityRecovery = new HelicopterVisibilityRecovery();
@@ -54,6 +54,10 @@ public final class HelicopterFlightPlanner {
     private boolean evasionBraking;
     @Nullable
     private Vec3 evasionDirection;
+    @Nullable
+    private Vec3 evasionPosition;
+    private double evasionRemaining;
+    private long lastEvasionTick = Long.MIN_VALUE;
 
     void reset() {
         this.hoverY = Double.NaN;
@@ -156,58 +160,87 @@ public final class HelicopterFlightPlanner {
 
     @Nullable
     Plan evasionPlan(VehicleController controller, AircraftState state, @Nullable Entity pressure,
-                     Entity target, Vec3 targetCenter, double desiredY, double combatDistance,
+                     boolean incoming, Entity target, Vec3 targetCenter, double desiredY, double combatDistance,
                      double followRange, HelicopterEnvironment environment) {
         if (environment == HelicopterEnvironment.NONE) return null;
         int targetId = target.getId();
+        long gameTime = controller.level().getGameTime();
         double evasionDistance = Math.min(followRange - DIVE_PASS_RANGE_MARGIN,
                 combatDistance + OUTER_COMBAT_TOLERANCE);
         if (this.evasionTargetId != targetId
-                || pressure != null && this.evasionSourceId != pressure.getId()) {
+                || this.lastEvasionTick != Long.MIN_VALUE
+                && (gameTime < this.lastEvasionTick || gameTime > this.lastEvasionTick + 1L)) {
             this.clearEvasion();
         }
+        this.lastEvasionTick = gameTime;
+        this.evasionTargetId = targetId;
         if (pressure == null && this.evasionDirection == null) {
-            this.clearEvasion();
+            this.evasionSourceId = -1;
             return null;
         }
-        if (this.evasionDirection == null && pressure != null
-                && this.evasionSourceId != pressure.getId()) {
-            this.evasionSourceId = pressure.getId();
-            this.evasionTargetId = targetId;
-            Vec3 away = horizontalUnit(state.position().subtract(pressure.position()), state);
-            for (double angle : EVASION_ANGLES) {
-                Vec3 direction = rotate(away, angle);
-                Vec3 destination = divePassExitPoint(targetCenter, direction, desiredY, evasionDistance);
-                if (evasionDistance > INNER_COMBAT_TOLERANCE
-                        && this.visibilityRecovery.directDestinationClear(
-                        controller, targetCenter, state.position(), destination)) {
-                    this.evasionDirection = direction;
-                    this.clearRetreatRoute();
-                    break;
-                }
-            }
-        }
-        if (this.evasionDirection == null) return null;
+        if (this.evasionDirection == null && this.evasionSourceId == pressure.getId()) return null;
         double stoppingDistance = Math.max(0.0D, controller.estimatedStabilizedHorizontalStoppingDistance());
         Entity opponent = target.getRootVehicle();
         Vec3 separation = state.position().subtract(opponent.getBoundingBox().getCenter())
                 .multiply(1.0D, 0.0D, 1.0D);
         double opponentStoppingDistance = VehicleControllers.create(opponent)
                 .map(VehicleController::estimatedStabilizedHorizontalStoppingDistance).orElse(0.0D);
-        // Both aircraft may be separating; a moving waypoint alone cannot bound their range.
-        double projectedDistance = separation
+        Vec3 projectedSeparation = separation
                 .add(state.velocity().multiply(1.0D, 0.0D, 1.0D).normalize().scale(stoppingDistance))
                 .subtract(opponent.getDeltaMovement().multiply(1.0D, 0.0D, 1.0D).normalize()
-                        .scale(Math.max(0.0D, opponentStoppingDistance))).horizontalDistance();
-        Vec3 destination = divePassExitPoint(targetCenter, this.evasionDirection, desiredY, evasionDistance);
-        if (!this.evasionBraking && (reachedOrPassed(state, destination, false)
-                || separation.horizontalDistance() >= evasionDistance
+                        .scale(Math.max(0.0D, opponentStoppingDistance)));
+        if (this.evasionDirection == null && pressure != null
+                && this.evasionSourceId != pressure.getId()) {
+            this.evasionSourceId = pressure.getId();
+            double budget = Math.min(combatDistance, evasionDistance)
+                    * (0.25D + controller.level().random.nextDouble() * 0.1D);
+            Vec3 axis = horizontalUnit(incoming ? state.velocity().subtract(pressure.getDeltaMovement())
+                    : state.position().subtract(pressure.position()), state);
+            double totalWeight = 0.0D;
+            for (double angle : EVASION_ANGLES) {
+                Vec3 direction = rotate(axis, angle);
+                Vec3 destination = state.position().add(direction.scale(budget));
+                destination = new Vec3(destination.x, desiredY, destination.z);
+                if (projectedSeparation.add(direction.scale(budget)).length() >= evasionDistance
+                        || !this.visibilityRecovery.directDestinationClear(
+                        controller, targetCenter, state.position(), destination)) continue;
+                // Randomize only among safe crossings; current inertia is a small preference.
+                double weight = 1.0D + 0.2D * direction.dot(
+                        state.velocity().multiply(1.0D, 0.0D, 1.0D).normalize());
+                totalWeight += weight;
+                if (controller.level().random.nextDouble() * totalWeight < weight) this.evasionDirection = direction;
+            }
+            if (this.evasionDirection != null) {
+                this.evasionRemaining = budget;
+                this.evasionPosition = state.position();
+                this.clearRetreatRoute();
+                VehicleAiLogger.debug(controller.entity(),
+                        "Helicopter evasion started target={} source={} incoming={} direction={} budget={} limit={}",
+                        targetId, this.evasionSourceId, incoming, this.evasionDirection, budget, evasionDistance);
+            }
+        }
+        if (this.evasionDirection == null) return null;
+        if (pressure != null) this.evasionSourceId = pressure.getId();
+        // Repeated same-tick selections consume zero extra distance and never resample the segment.
+        this.evasionRemaining -= horizontalDistance(state.position(), this.evasionPosition);
+        this.evasionPosition = state.position();
+        Vec3 destination = state.position().add(this.evasionDirection.scale(
+                Math.min(this.evasionRemaining, Math.max(MOVEMENT_PASS_DISTANCE,
+                        stoppingDistance + MOVEMENT_MAX_REACHED_DISTANCE))));
+        destination = new Vec3(destination.x, desiredY, destination.z);
+        double projectedDistance = projectedSeparation.length();
+        String endReason = pressure == null ? "pressure_exit"
+                : this.evasionRemaining <= stoppingDistance ? "travel_budget"
+                : separation.length() >= evasionDistance
                 || separation.dot(state.velocity().subtract(opponent.getDeltaMovement())) > 0.0D
-                && projectedDistance >= evasionDistance)) {
+                && projectedDistance >= evasionDistance ? "range"
+                : !this.visibilityRecovery.directDestinationClear(
+                controller, targetCenter, state.position(), destination) ? "corridor" : null;
+        if (!this.evasionBraking && endReason != null) {
             this.evasionBraking = true;
             VehicleAiLogger.debug(controller.entity(),
-                    "Helicopter evasive braking target={} distance={} projectedDistance={} limit={} stoppingDistance={} opponentStoppingDistance={}",
-                    targetId, separation.horizontalDistance(), projectedDistance, evasionDistance,
+                    "Helicopter evasive braking target={} reason={} remaining={} distance={} projectedDistance={} limit={} stoppingDistance={} opponentStoppingDistance={}",
+                    targetId, endReason, this.evasionRemaining, separation.length(), projectedDistance, evasionDistance,
                     stoppingDistance, opponentStoppingDistance);
         }
         if (this.evasionBraking) {
@@ -216,14 +249,12 @@ public final class HelicopterFlightPlanner {
             }
             this.evasionBraking = false;
             this.evasionDirection = null;
+            this.evasionPosition = null;
+            VehicleAiLogger.debug(controller.entity(), "Helicopter evasion finished target={} source={} remaining={}",
+                    targetId, this.evasionSourceId, this.evasionRemaining);
             return null;
         }
-        if (!this.visibilityRecovery.directDestinationClear(
-                controller, targetCenter, state.position(), destination)) {
-            this.evasionDirection = null;
-            return null;
-        }
-        return plan(destination, destination, VISIBILITY_RECOVERY_CRUISE_SPEED, true,
+        return plan(destination, destination, APPROACH_CRUISE_SPEED, false,
                 true, Phase.EVASIVE_PASS);
     }
 
@@ -232,6 +263,9 @@ public final class HelicopterFlightPlanner {
         this.evasionTargetId = -1;
         this.evasionDirection = null;
         this.evasionBraking = false;
+        this.evasionPosition = null;
+        this.evasionRemaining = 0.0D;
+        this.lastEvasionTick = Long.MIN_VALUE;
     }
 
     Plan navigationPlan(VehicleController controller, AircraftState state, Vec3 destination,

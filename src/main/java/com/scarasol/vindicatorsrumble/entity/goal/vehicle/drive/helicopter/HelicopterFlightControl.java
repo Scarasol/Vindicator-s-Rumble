@@ -179,6 +179,7 @@ final class HelicopterFlightControl {
         return horizontalError >= APPROACH_MIN_HORIZONTAL_ERROR
                 && !lateralStabilizing
                 && !powerTrimDown
+                && projectedYError(state, yError) >= -APPROACH_PROJECTED_TRIM_ERROR
                 && state.power() < movementPowerThreshold(request);
     }
 
