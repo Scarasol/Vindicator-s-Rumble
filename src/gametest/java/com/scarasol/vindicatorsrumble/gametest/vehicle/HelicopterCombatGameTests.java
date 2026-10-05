@@ -20,6 +20,8 @@ import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.NeutralMob;
+import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.gametest.GameTestHolder;
@@ -33,7 +35,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
-@GameTestHolder("vindicators_rumble_recruits")
+@GameTestHolder("vindicators_rumble_helicopters")
 @PrefixGameTestTemplate(false)
 public final class HelicopterCombatGameTests {
     private static final AtomicInteger ARENA = new AtomicInteger();
@@ -133,6 +135,79 @@ public final class HelicopterCombatGameTests {
     @GameTest(batch = "helicopter_combat", template = "empty", timeoutTicks = 520)
     public static void differentSizedHelicoptersDoNotKeepRaisingEachOthersCombatHeight(GameTestHelper helper) {
         verifyReciprocalCombat(helper, "ah_6", "mi_28");
+    }
+
+    @GameTest(batch = "helicopter_combat", template = "empty", timeoutTicks = 1000)
+    public static void closeAh6sDoNotDisengageBeyondTargetRange(GameTestHelper helper) {
+        verifyClosingCombat(helper, "ah_6", 16);
+    }
+
+    @GameTest(batch = "helicopter_combat", template = "empty", timeoutTicks = 1000)
+    public static void closeDifferentHelicoptersDoNotDisengageBeyondTargetRange(GameTestHelper helper) {
+        verifyClosingCombat(helper, "mi_28", 24);
+    }
+
+    private static void verifyClosingCombat(GameTestHelper helper, String opponent, int separation) {
+        Fixture fixture = new Fixture(helper, "ah_6", 0.0D, opponent, separation);
+        fixture.vehicle.setDeltaMovement(0.0D, 0.0D, 0.6D);
+        fixture.targetVehicle.setDeltaMovement(0.0D, 0.0D, -0.6D);
+        long[] acquiredAt = {-1};
+        double[] maxDistance = {0.0D};
+        int[] previousAnger = {-1};
+        helper.onEachTick(() -> {
+            if (fixture.driver.getTarget() != fixture.target || fixture.target.getTarget() != fixture.driver) {
+                helper.assertTrue(acquiredAt[0] < 0,
+                        "Close air combat lost an acquired opponent: driver=" + fixture.driver.getTarget()
+                                + " opponent=" + fixture.target.getTarget() + " distance="
+                                + fixture.driver.position().subtract(fixture.target.position()).horizontalDistance()
+                                + " alive=" + fixture.driver.isAlive() + "/" + fixture.target.isAlive()
+                                + " health=" + fixture.driver.getHealth() + "/" + fixture.target.getHealth()
+                                + " passengers=" + fixture.driver.isPassenger() + "/" + fixture.target.isPassenger()
+                                + " range=" + fixture.driver.getAttributeValue(Attributes.FOLLOW_RANGE) + "/"
+                                + fixture.target.getAttributeValue(Attributes.FOLLOW_RANGE)
+                                + " elapsed=" + (helper.getTick() - acquiredAt[0])
+                                + " anger=" + ((NeutralMob) fixture.target).getRemainingPersistentAngerTime()
+                                + " previousAnger=" + previousAnger[0]
+                                + " canAttack=" + fixture.target.canAttack(fixture.driver)
+                                + " seen=" + fixture.target.getSensing().hasLineOfSight(fixture.driver)
+                                + " effects=" + fixture.driver.getActiveEffects()
+                                + " targetGoals=" + fixture.target.targetSelector.getRunningGoals()
+                                .map(goal -> goal.getGoal().getClass().getSimpleName()).toList()
+                                + " lastEvent=" + fixture.targetEvent);
+                helper.assertTrue(helper.getTick() < 100, "Close combat failed natural mutual acquisition");
+                return;
+            }
+            NeutralMob opposingPilot = (NeutralMob) fixture.target;
+            if (acquiredAt[0] < 0) {
+                if (!fixture.driver.getUUID().equals(opposingPilot.getPersistentAngerTarget())) return;
+                acquiredAt[0] = helper.getTick();
+                // Exclude native anger expiry from the movement observation, after natural acquisition.
+                opposingPilot.setRemainingPersistentAngerTime(1000);
+            }
+            previousAnger[0] = opposingPilot.getRemainingPersistentAngerTime();
+            double distance = fixture.driver.position().subtract(fixture.target.position()).horizontalDistance();
+            maxDistance[0] = Math.max(maxDistance[0], distance);
+            double range = Math.min(fixture.driver.getAttributeValue(Attributes.FOLLOW_RANGE),
+                    fixture.target.getAttributeValue(Attributes.FOLLOW_RANGE));
+            if ((helper.getTick() - acquiredAt[0]) % 20 == 0) {
+                LogUtils.getLogger().info("Helicopter closing combat opponent={} elapsed={} distance={} maxDistance={} range={} velocities={}/{}",
+                        opponent, helper.getTick() - acquiredAt[0], distance, maxDistance[0], range,
+                        fixture.vehicle.getDeltaMovement(), fixture.targetVehicle.getDeltaMovement());
+                LogUtils.getLogger().info("Helicopter closing decisions driver={} opponent={}",
+                        fixture.driverDecision, fixture.targetDecision);
+            }
+            helper.assertTrue(distance <= range, "Evasion left mutual target range: " + distance + " > " + range);
+            helper.assertTrue(fixture.driver.isPassenger() && fixture.target.isPassenger(),
+                    "Close air combat lost a passenger");
+            if (helper.getTick() - acquiredAt[0] < 720) return;
+            LogUtils.getLogger().info("Helicopter closing summary opponent={} elapsed={} maxDistance={} range={} firedShots={}/{}",
+                    opponent, helper.getTick() - acquiredAt[0], maxDistance[0], range,
+                    fixture.firedShots, fixture.targetFiredShots);
+            helper.assertTrue(fixture.firedShots > 0 && fixture.targetFiredShots > 0,
+                    "Close maneuvering prevented either opponent from fighting");
+            fixture.close();
+            helper.succeed();
+        });
     }
 
     @GameTest(batch = "helicopter_combat", template = "empty", timeoutTicks = 340)
@@ -276,6 +351,8 @@ public final class HelicopterCombatGameTests {
                         fixture.target.getTarget() == fixture.driver, fixture.vehicle.getBoundingBox().getCenter().y,
                         fixture.targetVehicle.getBoundingBox().getCenter().y, initialHeight, highest[0],
                         fixture.controller.pitch(), targetController.pitch(), fixture.firedShots, fixture.targetFiredShots);
+                LogUtils.getLogger().info("Helicopter reciprocal decisions driver={} opponent={}",
+                        fixture.driverDecision, fixture.targetDecision);
             }
             helper.assertTrue(fixture.driver.isPassenger() && fixture.target.isPassenger(),
                     "Reciprocal combat lost a passenger: driverAlive=" + fixture.driver.isAlive()
@@ -311,12 +388,19 @@ public final class HelicopterCombatGameTests {
         final AbstractAppender observer;
         int firedShots;
         int targetFiredShots;
+        String driverDecision;
+        String targetDecision;
+        String targetEvent;
 
         Fixture(GameTestHelper helper, String helicopter, double targetHeightOffset) {
             this(helper, helicopter, targetHeightOffset, null);
         }
 
         Fixture(GameTestHelper helper, String helicopter, double targetHeightOffset, String opponent) {
+            this(helper, helicopter, targetHeightOffset, opponent, 40);
+        }
+
+        Fixture(GameTestHelper helper, String helicopter, double targetHeightOffset, String opponent, int separation) {
             CommonConfig.VEHICLE_AI_DEBUG.set(true);
             this.level = helper.getLevel();
             this.origin = new BlockPos(4096 + ARENA.getAndIncrement() * 256, 5, 4096);
@@ -334,7 +418,7 @@ public final class HelicopterCombatGameTests {
             }
             this.vehicle = this.create(helicopter, Vec3.atBottomCenterOf(this.origin).add(0.0D, 32.0D, 0.0D));
             this.targetVehicle = this.create(opponent == null ? helicopter : opponent,
-                    Vec3.atBottomCenterOf(this.origin.offset(0, 0, 40)).add(0.0D, 32.0D + targetHeightOffset, 0.0D));
+                    Vec3.atBottomCenterOf(this.origin.offset(0, 0, separation)).add(0.0D, 32.0D + targetHeightOffset, 0.0D));
             this.controller = VehicleControllers.create(this.vehicle).orElseThrow();
             this.target = opponent == null ? EntityType.VILLAGER.create(this.level)
                     : (Mob) ForgeRegistries.ENTITY_TYPES.getValue(new ResourceLocation("guardvillagers", "guard"))
@@ -369,6 +453,11 @@ public final class HelicopterCombatGameTests {
                 @Override
                 public void append(LogEvent event) {
                     String message = event.getMessage().getFormattedMessage();
+                    if (message.contains(targetPrefix)) targetEvent = message;
+                    if (message.contains("Helicopter flight tick=")) {
+                        if (message.contains(driverPrefix)) driverDecision = message;
+                        if (message.contains(targetPrefix)) targetDecision = message;
+                    }
                     if (message.contains("SBW fire called")
                             && message.contains("groundTarget=false") && message.contains("canShootBefore=true")) {
                         if (message.contains(driverPrefix)) firedShots++;

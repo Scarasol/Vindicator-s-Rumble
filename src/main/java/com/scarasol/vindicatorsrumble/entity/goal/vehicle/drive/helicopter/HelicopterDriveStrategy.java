@@ -284,7 +284,7 @@ public final class HelicopterDriveStrategy implements DriveStrategy {
                 this.controller, aircraftState, target, hoverHeight, environment);
         HelicopterFlightPlanner.Plan plan = this.chooseHelicopterPlan(
                 aircraftState,
-                target == null ? -1 : target.getId(),
+                target,
                 targetCenter,
                 desiredY,
                 recoveryFloorY,
@@ -312,7 +312,7 @@ public final class HelicopterDriveStrategy implements DriveStrategy {
     }
 
     private HelicopterFlightPlanner.Plan chooseHelicopterPlan(HelicopterFlightPlanner.AircraftState aircraftState,
-                                                              int targetId,
+                                                              Entity target,
                                                               Vec3 targetCenter,
                                                               double desiredY,
                                                               double recoveryFloorY,
@@ -325,6 +325,7 @@ public final class HelicopterDriveStrategy implements DriveStrategy {
                                                               Entity pressure,
                                                               HelicopterEnvironment environment,
                                                               Vec3 recoveryWaypoint) {
+        int targetId = target == null ? -1 : target.getId();
         if (targetCenter != null && (preferStableFire || pressure != null)
                 && HelicopterFlightPlanner.needsPassPullOut(aircraftState)) {
             return HelicopterFlightPlanner.pullOutPlan(aircraftState, targetCenter, hoverHeight);
@@ -346,9 +347,18 @@ public final class HelicopterDriveStrategy implements DriveStrategy {
         }
 
         HelicopterFlightPlanner.Plan evasive = this.flightPlanner.evasionPlan(
-                this.controller, aircraftState, pressure, targetId, targetCenter, desiredY,
+                this.controller, aircraftState, pressure, target, targetCenter, desiredY,
                 combatDistance, VehicleAiTuning.followRange(this.mob), environment);
         if (evasive != null) return evasive;
+
+        Entity targetVehicle = target.getRootVehicle();
+        if (horizontalDistance(aircraftState.position(), targetVehicle.position())
+                > combatDistance + HelicopterFlightPlanner.OUTER_COMBAT_TOLERANCE
+                && !targetVehicle.onGround() && VehicleControllers.create(targetVehicle)
+                .map(VehicleController::supportsFlightControl).orElse(false)) {
+            return this.combatPositionPlan(
+                    aircraftState, targetId, targetCenter, desiredY, hoverHeight, combatDistance, environment);
+        }
 
         if (fixedWeaponAttackActive) {
             return HelicopterFlightPlanner.attackRunPlan(targetCenter, desiredY);

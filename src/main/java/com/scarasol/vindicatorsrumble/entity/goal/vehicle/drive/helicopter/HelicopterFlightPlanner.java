@@ -2,6 +2,7 @@ package com.scarasol.vindicatorsrumble.entity.goal.vehicle.drive.helicopter;
 
 import com.scarasol.vindicatorsrumble.api.vehicle.VehicleController;
 import com.scarasol.vindicatorsrumble.compat.VehicleControllers;
+import com.scarasol.vindicatorsrumble.util.VehicleAiLogger;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.core.BlockPos;
@@ -50,7 +51,7 @@ public final class HelicopterFlightPlanner {
     private int hoverTargetId = -1;
     private int evasionSourceId = -1;
     private int evasionTargetId = -1;
-    private double evasionDistance;
+    private boolean evasionBraking;
     @Nullable
     private Vec3 evasionDirection;
 
@@ -155,9 +156,12 @@ public final class HelicopterFlightPlanner {
 
     @Nullable
     Plan evasionPlan(VehicleController controller, AircraftState state, @Nullable Entity pressure,
-                     int targetId, Vec3 targetCenter, double desiredY, double combatDistance,
+                     Entity target, Vec3 targetCenter, double desiredY, double combatDistance,
                      double followRange, HelicopterEnvironment environment) {
         if (environment == HelicopterEnvironment.NONE) return null;
+        int targetId = target.getId();
+        double evasionDistance = Math.min(followRange - DIVE_PASS_RANGE_MARGIN,
+                combatDistance + OUTER_COMBAT_TOLERANCE);
         if (this.evasionTargetId != targetId
                 || pressure != null && this.evasionSourceId != pressure.getId()) {
             this.clearEvasion();
@@ -170,14 +174,11 @@ public final class HelicopterFlightPlanner {
                 && this.evasionSourceId != pressure.getId()) {
             this.evasionSourceId = pressure.getId();
             this.evasionTargetId = targetId;
-            this.evasionDistance = Math.min(followRange - DIVE_PASS_RANGE_MARGIN,
-                    Math.max(combatDistance + OUTER_COMBAT_TOLERANCE,
-                            horizontalDistance(state.position(), targetCenter)));
             Vec3 away = horizontalUnit(state.position().subtract(pressure.position()), state);
             for (double angle : EVASION_ANGLES) {
                 Vec3 direction = rotate(away, angle);
-                Vec3 destination = divePassExitPoint(targetCenter, direction, desiredY, this.evasionDistance);
-                if (this.evasionDistance > INNER_COMBAT_TOLERANCE
+                Vec3 destination = divePassExitPoint(targetCenter, direction, desiredY, evasionDistance);
+                if (evasionDistance > INNER_COMBAT_TOLERANCE
                         && this.visibilityRecovery.directDestinationClear(
                         controller, targetCenter, state.position(), destination)) {
                     this.evasionDirection = direction;
@@ -187,9 +188,37 @@ public final class HelicopterFlightPlanner {
             }
         }
         if (this.evasionDirection == null) return null;
-        Vec3 destination = divePassExitPoint(targetCenter, this.evasionDirection, desiredY, this.evasionDistance);
-        if (reachedOrPassed(state, destination, false)
-                || !this.visibilityRecovery.directDestinationClear(
+        double stoppingDistance = Math.max(0.0D, controller.estimatedStabilizedHorizontalStoppingDistance());
+        Entity opponent = target.getRootVehicle();
+        Vec3 separation = state.position().subtract(opponent.getBoundingBox().getCenter())
+                .multiply(1.0D, 0.0D, 1.0D);
+        double opponentStoppingDistance = VehicleControllers.create(opponent)
+                .map(VehicleController::estimatedStabilizedHorizontalStoppingDistance).orElse(0.0D);
+        // Both aircraft may be separating; a moving waypoint alone cannot bound their range.
+        double projectedDistance = separation
+                .add(state.velocity().multiply(1.0D, 0.0D, 1.0D).normalize().scale(stoppingDistance))
+                .subtract(opponent.getDeltaMovement().multiply(1.0D, 0.0D, 1.0D).normalize()
+                        .scale(Math.max(0.0D, opponentStoppingDistance))).horizontalDistance();
+        Vec3 destination = divePassExitPoint(targetCenter, this.evasionDirection, desiredY, evasionDistance);
+        if (!this.evasionBraking && (reachedOrPassed(state, destination, false)
+                || separation.horizontalDistance() >= evasionDistance
+                || separation.dot(state.velocity().subtract(opponent.getDeltaMovement())) > 0.0D
+                && projectedDistance >= evasionDistance)) {
+            this.evasionBraking = true;
+            VehicleAiLogger.debug(controller.entity(),
+                    "Helicopter evasive braking target={} distance={} projectedDistance={} limit={} stoppingDistance={} opponentStoppingDistance={}",
+                    targetId, separation.horizontalDistance(), projectedDistance, evasionDistance,
+                    stoppingDistance, opponentStoppingDistance);
+        }
+        if (this.evasionBraking) {
+            if (stoppingDistance > DIVE_PASS_START_STOPPING_DISTANCE) {
+                return divePassAlignmentPlan(state, targetCenter, desiredY);
+            }
+            this.evasionBraking = false;
+            this.evasionDirection = null;
+            return null;
+        }
+        if (!this.visibilityRecovery.directDestinationClear(
                 controller, targetCenter, state.position(), destination)) {
             this.evasionDirection = null;
             return null;
@@ -202,6 +231,7 @@ public final class HelicopterFlightPlanner {
         this.evasionSourceId = -1;
         this.evasionTargetId = -1;
         this.evasionDirection = null;
+        this.evasionBraking = false;
     }
 
     Plan navigationPlan(VehicleController controller, AircraftState state, Vec3 destination,
