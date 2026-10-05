@@ -2,6 +2,7 @@ package com.scarasol.vindicatorsrumble.event;
 
 import com.scarasol.vindicatorsrumble.VindicatorsRumbleMod;
 import com.scarasol.vindicatorsrumble.api.vehicle.SeatHandle;
+import com.scarasol.vindicatorsrumble.api.vehicle.VehicleThreats;
 import com.scarasol.vindicatorsrumble.compat.ModCompat;
 import com.scarasol.vindicatorsrumble.compat.VehicleControllers;
 import com.scarasol.vindicatorsrumble.compat.recruits.RecruitsCompat;
@@ -34,6 +35,7 @@ import net.minecraftforge.event.entity.living.LivingChangeTargetEvent;
 import net.minecraftforge.event.entity.living.LivingEvent;
 import net.minecraftforge.event.entity.player.PlayerInteractEvent;
 import net.minecraftforge.event.level.LevelEvent;
+import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 
@@ -76,6 +78,7 @@ public class VehicleAiEventHandler {
         }
 
         Entity entity = event.getEntity();
+        VehicleThreats.clearEntity(entity);
         if (ModCompat.isRecruitsLoaded()) {
             RecruitsCompat.release(entity);
         }
@@ -90,6 +93,9 @@ public class VehicleAiEventHandler {
 
     @SubscribeEvent
     public static void onLivingDeath(LivingDeathEvent event) {
+        if (!event.getEntity().level().isClientSide()) {
+            VehicleThreats.clearEntity(event.getEntity());
+        }
         if (!event.getEntity().level().isClientSide()
                 && event.getEntity() instanceof Mob mob
                 && mob.getType().is(ModTags.EntityTypes.VEHICLE_AI_USERS)) {
@@ -102,8 +108,17 @@ public class VehicleAiEventHandler {
 
     @SubscribeEvent
     public static void onLevelUnload(LevelEvent.Unload event) {
-        if (event.getLevel() instanceof ServerLevel level && ModCompat.isRecruitsLoaded()) {
-            RecruitsCompat.clearLevel(level);
+        if (event.getLevel() instanceof ServerLevel level) {
+            VehicleThreats.clearLevel(level);
+            if (ModCompat.isRecruitsLoaded()) RecruitsCompat.clearLevel(level);
+        }
+    }
+
+    @SubscribeEvent
+    public static void onLevelTick(TickEvent.LevelTickEvent event) {
+        if (event.phase == TickEvent.Phase.END && event.level instanceof ServerLevel level
+                && level.getGameTime() % 20L == 0L) {
+            VehicleThreats.expire(level);
         }
     }
 

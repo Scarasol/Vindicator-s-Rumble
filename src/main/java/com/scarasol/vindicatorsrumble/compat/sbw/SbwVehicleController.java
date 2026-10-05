@@ -357,6 +357,9 @@ public class SbwVehicleController implements VehicleController {
         if (CommonConfig.VEHICLE_AI_NEEDS_FUEL.get()) {
             this.refillVehicleEnergy();
         }
+        if (this.vehicle.hasDecoy() && !this.vehicle.hasSmokeDecoy() && this.vehicle.getDecoyCount() == 0) {
+            this.vehicle.setDecoyCount(this.vehicle.computed().getDecoyMagazineSize());
+        }
         if (!CommonConfig.VEHICLE_AI_NEEDS_AMMO.get()) {
             return;
         }
@@ -378,6 +381,12 @@ public class SbwVehicleController implements VehicleController {
                 gun.virtualAmmo.set(totalAmmo - loadedAmmo);
             });
         }
+    }
+
+    @Override
+    public boolean canDeployDecoy() {
+        return !this.isWreck() && this.vehicle.hasDecoy() && !this.vehicle.hasSmokeDecoy()
+                && this.vehicle.getDecoyCount() > 0;
     }
 
     @Override

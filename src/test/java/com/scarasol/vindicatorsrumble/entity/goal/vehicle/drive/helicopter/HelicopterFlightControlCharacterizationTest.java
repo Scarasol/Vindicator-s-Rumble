@@ -26,6 +26,21 @@ class HelicopterFlightControlCharacterizationTest {
     }
 
     @Test
+    void countermeasureRequestChangesOnlyTheDecoyBit() {
+        for (Case sample : cases()) {
+            VehicleFlightInput ordinary = new HelicopterFlightControl()
+                    .command(sample.state, sample.plan.flightRequest(), sample.environment);
+            VehicleFlightInput defensive = new HelicopterFlightControl()
+                    .command(sample.state, sample.plan.flightRequest(), sample.environment, true);
+            VehicleInput input = ordinary.input();
+            assertEquals(new VehicleFlightInput(new VehicleInput(
+                    input.forward(), input.back(), input.left(), input.right(), input.brake(),
+                    input.sprint(), input.up(), input.down(), input.fire(), true),
+                    ordinary.mouseX(), ordinary.mouseY()), defensive, sample.name);
+        }
+    }
+
+    @Test
     void idleHeightKeepsAReasonableHeightInsteadOfTrackingThePreferredPoint() {
         HelicopterFlightPlanner planner = new HelicopterFlightPlanner();
         for (double height : new double[]{18.0D, 22.0D, 27.0D}) {

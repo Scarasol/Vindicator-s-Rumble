@@ -2,6 +2,7 @@ package com.scarasol.vindicatorsrumble.gametest.vehicle;
 
 import com.mojang.logging.LogUtils;
 import com.scarasol.vindicatorsrumble.api.vehicle.VehicleController;
+import com.scarasol.vindicatorsrumble.api.vehicle.VehicleThreats;
 import com.scarasol.vindicatorsrumble.api.vehicle.WeaponHandle;
 import com.scarasol.vindicatorsrumble.compat.VehicleControllers;
 import com.scarasol.vindicatorsrumble.compat.sbw.SbwGameTestVehicle;
@@ -60,6 +61,68 @@ public final class HelicopterCombatGameTests {
     @GameTest(batch = "helicopter_combat", template = "empty", timeoutTicks = 260)
     public static void mi28FiresAtASlightlyLowerAirborneTargetWithoutASteepDive(GameTestHelper helper) {
         verifyAirCombat(helper, "mi_28", -4.0D);
+    }
+
+    @GameTest(batch = "helicopter_combat", template = "empty", timeoutTicks = 320)
+    public static void ah6ReactsToLockWithoutDumpingItsDecoyMagazine(GameTestHelper helper) {
+        verifyLockedDefense(helper, "ah_6", 8);
+    }
+
+    @GameTest(batch = "helicopter_combat", template = "empty", timeoutTicks = 320)
+    public static void mi28ReactsToLockWithoutDumpingItsDecoyMagazine(GameTestHelper helper) {
+        verifyLockedDefense(helper, "mi_28", 8);
+    }
+
+    @GameTest(batch = "helicopter_combat", template = "empty", timeoutTicks = 320)
+    public static void exhaustedCountermeasuresDoNotBlockEvasiveMovement(GameTestHelper helper) {
+        verifyLockedDefense(helper, "ah_6", 0);
+    }
+
+    private static void verifyLockedDefense(GameTestHelper helper, String helicopter, int decoys) {
+        Fixture fixture = new Fixture(helper, helicopter, 0.0D);
+        SbwGameTestVehicle.setDecoyStock(fixture.vehicle, decoys);
+        long[] started = {-1};
+        Vec3[] initialPosition = {null};
+        double[] maxDisplacement = {0.0D};
+        int[] firstRelease = {-1};
+        helper.onEachTick(() -> {
+            if (fixture.driver.getTarget() != fixture.target) {
+                helper.assertTrue(started[0] < 0, "Defensive maneuver abandoned its acquired combat target");
+                helper.assertTrue(helper.getTick() < 100, "Defense fixture failed natural target acquisition");
+                return;
+            }
+            if (started[0] < 0) {
+                started[0] = helper.getTick();
+                initialPosition[0] = fixture.vehicle.position();
+                VehicleThreats.report(fixture.targetVehicle, fixture.vehicle, VehicleThreats.Stage.LOCKED, 100);
+            }
+            int elapsed = (int) (helper.getTick() - started[0]);
+            int stock = SbwGameTestVehicle.decoyStock(fixture.vehicle);
+            if (stock < decoys && firstRelease[0] < 0) firstRelease[0] = elapsed;
+            if (firstRelease[0] >= 0) {
+                helper.assertTrue(decoys - stock <= 1 + (elapsed - firstRelease[0]) / 20,
+                        "Defense consumed countermeasures every tick");
+            }
+            maxDisplacement[0] = Math.max(maxDisplacement[0],
+                    fixture.vehicle.position().subtract(initialPosition[0]).horizontalDistance());
+            helper.assertTrue(fixture.vehicle.isAlive() && !fixture.controller.isWreck(),
+                    "Defensive maneuver wrecked the helicopter");
+            helper.assertTrue(Math.abs(fixture.controller.pitch()) < 50.0F,
+                    "Lock evasion introduced a steep ground attack dive");
+            helper.assertTrue(fixture.vehicle.getY() >= fixture.origin.getY() + 12.0D,
+                    "Lock evasion lost safe ground clearance");
+            helper.assertTrue(fixture.vehicle.position().subtract(fixture.targetVehicle.position())
+                    .horizontalDistance() < 64.0D, "Defense left acquisition range");
+            if (elapsed < 180) return;
+            LogUtils.getLogger().info("Helicopter defense vehicle={} initialDecoys={} remainingDecoys={} firstRelease={} maxDisplacement={} finalDistance={}",
+                    helicopter, decoys, stock, firstRelease[0], maxDisplacement[0],
+                    fixture.vehicle.position().subtract(fixture.targetVehicle.position()).horizontalDistance());
+            helper.assertTrue(maxDisplacement[0] > 6.0D, "Lock pressure never produced a maneuver");
+            helper.assertTrue(decoys == 0 ? stock == 0 : firstRelease[0] >= 0,
+                    "Countermeasure capability was not respected");
+            fixture.close();
+            helper.succeed();
+        });
     }
 
     @GameTest(batch = "helicopter_combat", template = "empty", timeoutTicks = 520)

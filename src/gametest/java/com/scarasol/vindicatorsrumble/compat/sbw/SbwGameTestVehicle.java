@@ -2,8 +2,12 @@ package com.scarasol.vindicatorsrumble.compat.sbw;
 
 import com.atsuishio.superbwarfare.entity.vehicle.base.VehicleEntity;
 import com.atsuishio.superbwarfare.data.gun.GunProp;
+import com.atsuishio.superbwarfare.entity.projectile.IglaMissileEntity;
+import com.atsuishio.superbwarfare.entity.projectile.MissileProjectile;
 import com.google.gson.JsonObject;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.item.ItemStack;
 
 import java.util.List;
@@ -72,6 +76,30 @@ public final class SbwGameTestVehicle {
         VehicleEntity vehicle = (VehicleEntity) entity;
         vehicle.setHoverMode(true);
         vehicle.setPower(0.09F);
+    }
+
+    public static void setDecoyStock(Entity entity, int count) {
+        ((VehicleEntity) entity).setDecoyCount(count);
+    }
+
+    public static int decoyStock(Entity entity) {
+        return ((VehicleEntity) entity).getDecoyCount();
+    }
+
+    public static Entity trackedMissile(ServerLevel level, Entity owner, Entity target, Vec3 position) {
+        IglaMissileEntity missile = new IglaMissileEntity(owner, level, 0.0F, 0.0F, 0.0F);
+        missile.setPos(position);
+        missile.setTargetUUID(target.getStringUUID());
+        level.addFreshEntity(missile);
+        return missile;
+    }
+
+    public static void retargetMissile(Entity missile, Entity target) {
+        ((MissileProjectile) missile).setTargetUUID(target.getStringUUID());
+    }
+
+    public static void loseMissileTarget(Entity missile) {
+        ((MissileProjectile) missile).setLostTarget(true);
     }
 
     public static void increaseCombatFixtureDurability(Entity entity) {

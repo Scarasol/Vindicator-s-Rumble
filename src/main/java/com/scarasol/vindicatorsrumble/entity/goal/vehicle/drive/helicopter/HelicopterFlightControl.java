@@ -63,6 +63,12 @@ final class HelicopterFlightControl {
     VehicleFlightInput command(HelicopterFlightPlanner.AircraftState state,
                                HelicopterFlightPlanner.FlightRequest request,
                                HelicopterEnvironment environment) {
+        return this.command(state, request, environment, false);
+    }
+
+    VehicleFlightInput command(HelicopterFlightPlanner.AircraftState state,
+                               HelicopterFlightPlanner.FlightRequest request,
+                               HelicopterEnvironment environment, boolean decoy) {
         if (this.hoverToggleCooldown > 0) {
             this.hoverToggleCooldown--;
         }
@@ -131,7 +137,7 @@ final class HelicopterFlightControl {
                 false,
                 down,
                 false,
-                false);
+                decoy);
         boolean tapHover = this.shouldTapHover(state, desiredHover, urgentHover);
         return new VehicleFlightInput(tapHover ? withHoverToggle(input, true) : input, mouseX, mouseY);
     }

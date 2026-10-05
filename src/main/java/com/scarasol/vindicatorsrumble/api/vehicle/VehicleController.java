@@ -59,6 +59,15 @@ public interface VehicleController {
         return false;
     }
 
+    default Optional<VehicleThreats.Threat> threat() {
+        return VehicleThreats.strongest(this.entity());
+    }
+
+    /** Unsupported, empty or unavailable countermeasures must return false. */
+    default boolean canDeployDecoy() {
+        return false;
+    }
+
     default float pitch() {
         return this.entity().getXRot();
     }
