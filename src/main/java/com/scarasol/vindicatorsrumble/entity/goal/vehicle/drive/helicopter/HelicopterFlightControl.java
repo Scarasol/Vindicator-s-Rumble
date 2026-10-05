@@ -47,13 +47,17 @@ final class HelicopterFlightControl {
     private static final double DIVE_PASS_MAX_UP_PITCH = -18.0D;
     private static final double DIVE_PASS_MAX_DIVE_PITCH = 78.0D;
     private static final double DIVE_PASS_PULL_OUT_PITCH = -8.0D;
+    private static final double MOVEMENT_TILT_GAIN = 32.0D;
+    private static final double MAX_MOVEMENT_TILT = 25.0D;
 
     private int hoverToggleCooldown;
     private boolean settlingAfterDive;
+    private boolean banking;
 
     void reset() {
         this.hoverToggleCooldown = 0;
         this.settlingAfterDive = false;
+        this.banking = false;
     }
 
     static VehicleFlightInput neutralInput() {
@@ -81,6 +85,7 @@ final class HelicopterFlightControl {
                 || this.settlingAfterDive && (Math.abs(state.pitch()) > MAX_LEVEL_PITCH
                 || horizontalSpeed > STABILIZED_HORIZONTAL_SPEED);
         boolean pullOut = !request.divePitch() && (request.pullOutPitch() || this.settlingAfterDive);
+        boolean separateFacing = hasLateralCourse(state, request);
         boolean recovery = state.altitude() < SAFE_ALTITUDE
                 || state.velocity().y < RECOVERY_DESCENT_SPEED && yError > -VERTICAL_TOLERANCE;
         boolean engineReady = state.engineStarted();
@@ -99,9 +104,16 @@ final class HelicopterFlightControl {
         boolean desiredHover = engineReady
                 && !request.divePitch()
                 && (hoverBrake || lateralStabilizing || recovery || pullOut || request.stableHover());
-        boolean urgentHover = desiredHover || request.divePitch();
+        boolean urgentHover = desiredHover || request.divePitch() || separateFacing;
 
-        double mouseX = mouseX(state, yawDiff, request.takeoffYawLimit(), engineReady);
+        this.banking = separateFacing || this.banking && Math.abs(state.roll()) > MAX_LEVEL_PITCH;
+        Vec3 forwardAxis = yawForward(state);
+        Vec3 rightAxis = new Vec3(-forwardAxis.z, 0.0D, forwardAxis.x);
+        double rollTarget = !engineReady || !this.banking ? Double.NaN
+                : separateFacing && !desiredHover
+                ? clamp(movementVelocity(state, request).subtract(state.velocity()).dot(rightAxis)
+                * MOVEMENT_TILT_GAIN, -MAX_MOVEMENT_TILT, MAX_MOVEMENT_TILT) : 0.0D;
+        double mouseX = mouseX(state, yawDiff, request.takeoffYawLimit(), engineReady, rollTarget);
         if (lateralStabilizing) {
             mouseX = lateralStabilizeMouseX(mouseX);
         }
@@ -110,6 +122,11 @@ final class HelicopterFlightControl {
         boolean back = false;
         boolean left = counterRoll && mouseX < 0.0D;
         boolean right = counterRoll && mouseX > 0.0D;
+        if (Double.isFinite(rollTarget)) {
+            double rollError = rollTarget - state.roll();
+            left = rollError < -1.0D;
+            right = rollError > 1.0D;
+        }
         double targetPitch = targetPitch(state, request, horizontalError,
                 forwardSpeed, activeBrake, lateralStabilizing, pullOut);
         if (recovery) {
@@ -139,7 +156,7 @@ final class HelicopterFlightControl {
                 false,
                 decoy);
         boolean tapHover = this.shouldTapHover(state, desiredHover, urgentHover);
-        return new VehicleFlightInput(tapHover ? withHoverToggle(input, true) : input, mouseX, mouseY);
+        return new VehicleFlightInput(tapHover ? withHoverToggle(input, true) : input, mouseX, mouseY, rollTarget);
     }
 
     private static boolean shouldPressForward(HelicopterFlightPlanner.AircraftState state,
@@ -276,6 +293,10 @@ final class HelicopterFlightControl {
         if (horizontalError < APPROACH_MIN_HORIZONTAL_ERROR) {
             return levelOrBrakePitch(forwardSpeed);
         }
+        if (hasLateralCourse(state, request)) {
+            return clamp((movementVelocity(state, request).dot(yawForward(state)) - forwardSpeed)
+                    * MOVEMENT_TILT_GAIN, -MAX_MOVEMENT_TILT, MAX_MOVEMENT_TILT);
+        }
         boolean passThrough = !request.stopAtDestination() && request.cruiseSpeed() > APPROACH_CRUISE_SPEED;
         double basePitch = passThrough ? PASS_THROUGH_BASE_PITCH : APPROACH_BASE_PITCH;
         double alignmentPitch = passThrough ? PASS_THROUGH_ALIGNMENT_PITCH : APPROACH_ALIGNMENT_PITCH;
@@ -352,16 +373,16 @@ final class HelicopterFlightControl {
     }
 
     private static double mouseX(HelicopterFlightPlanner.AircraftState state, double yawDiff,
-                                 boolean takeoff, boolean engineReady) {
+                                 boolean takeoff, boolean engineReady, double rollTarget) {
         if (!engineReady) {
             return 0.0D;
         }
         double roll = state.roll();
-        double absRoll = Math.abs(roll);
+        double absRoll = Math.abs(roll - (Double.isFinite(rollTarget) ? rollTarget : 0.0D));
         double rollFactor = clamp(1.0D - absRoll / 45.0D, 0.0D, 1.0D);
         double mouseLimit = takeoff ? TAKEOFF_MAX_MOUSE_X : MAX_MOUSE_X;
         double yawCommand = clamp(yawDiff / 1.75D, -mouseLimit, mouseLimit) * rollFactor;
-        double rollCorrection = clamp(roll / 8.0D, -3.0D, 3.0D);
+        double rollCorrection = Double.isFinite(rollTarget) ? 0.0D : clamp(roll / 8.0D, -3.0D, 3.0D);
         double rollCorrectionWeight = clamp((60.0D - Math.abs(yawDiff)) / 60.0D, 0.0D, 1.0D);
         return clamp(yawCommand + rollCorrection * rollCorrectionWeight, -mouseLimit, mouseLimit);
     }
@@ -394,6 +415,20 @@ final class HelicopterFlightControl {
         Vec3 facing = request.aimPoint().subtract(state.position());
         double dot = movement.x * facing.x + movement.z * facing.z;
         return dot < 0.0D ? -1.0D : 1.0D;
+    }
+
+    private static boolean hasLateralCourse(HelicopterFlightPlanner.AircraftState state,
+                                           HelicopterFlightPlanner.FlightRequest request) {
+        if (!request.approach() || request.divePitch()) return false;
+        Vec3 movement = request.desiredPosition().subtract(state.position()).multiply(1.0D, 0.0D, 1.0D).normalize();
+        Vec3 facing = request.aimPoint().subtract(state.position()).multiply(1.0D, 0.0D, 1.0D).normalize();
+        return Math.abs(movement.x * facing.z - movement.z * facing.x) > 0.5D;
+    }
+
+    private static Vec3 movementVelocity(HelicopterFlightPlanner.AircraftState state,
+                                         HelicopterFlightPlanner.FlightRequest request) {
+        return request.desiredPosition().subtract(state.position()).multiply(1.0D, 0.0D, 1.0D)
+                .normalize().scale(request.cruiseSpeed());
     }
 
     private static double yawDiffTo(HelicopterFlightPlanner.AircraftState state, Vec3 point) {

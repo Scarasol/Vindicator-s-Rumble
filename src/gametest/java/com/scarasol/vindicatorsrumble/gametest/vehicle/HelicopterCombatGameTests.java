@@ -196,6 +196,15 @@ public final class HelicopterCombatGameTests {
         double[] turn = {0.0D};
         double[] maxTurn = {0.0D};
         int[] lateShots = {0, 0};
+        long[] firstManeuverAt = {-1};
+        Vec3[] maneuverPosition = {null};
+        int[] maneuverShots = {0};
+        long[] crossingTicks = {-1};
+        long[] firingTicks = {-1};
+        long[] lastManeuverShot = {-1};
+        long[] longestFiringGap = {0};
+        int[] observedShots = {0};
+        double[] peakSpeed = {0.0D};
         Entity[] incoming = {null};
         boolean[] checkedRelay = {false};
         helper.onEachTick(() -> {
@@ -216,6 +225,39 @@ public final class HelicopterCombatGameTests {
                 initialPosition[0] = fixture.vehicle.position();
             }
             long elapsed = helper.getTick() - acquiredAt[0];
+            if (firstManeuverAt[0] < 0 && fixture.evasionStarts > 0) {
+                firstManeuverAt[0] = helper.getTick();
+                maneuverPosition[0] = fixture.vehicle.position();
+                maneuverShots[0] = fixture.firedShots;
+                observedShots[0] = fixture.firedShots;
+                lastManeuverShot[0] = helper.getTick();
+            }
+            if (firstManeuverAt[0] >= 0) {
+                long maneuverElapsed = helper.getTick() - firstManeuverAt[0];
+                double crossing = Math.abs(fixture.vehicle.getX() - maneuverPosition[0].x);
+                peakSpeed[0] = Math.max(peakSpeed[0], fixture.vehicle.getDeltaMovement().horizontalDistance());
+                if (crossingTicks[0] < 0 && crossing >= 6.0D) crossingTicks[0] = maneuverElapsed;
+                if (firingTicks[0] < 0 && fixture.firedShots > maneuverShots[0]) firingTicks[0] = maneuverElapsed;
+                if (maneuverElapsed <= 120) {
+                    longestFiringGap[0] = Math.max(longestFiringGap[0], helper.getTick() - lastManeuverShot[0]);
+                    if (fixture.firedShots > observedShots[0]) lastManeuverShot[0] = helper.getTick();
+                    observedShots[0] = fixture.firedShots;
+                }
+                if (opponent == null && !replaceThreats && maneuverElapsed == 80) {
+                    LogUtils.getLogger().info("Helicopter tactical response vehicle={} crossingTicks={} firingTicks={} peakSpeed={} crossing={} decision={}",
+                            helicopter, crossingTicks[0], firingTicks[0], peakSpeed[0], crossing, fixture.driverDecision);
+                    helper.assertTrue(crossingTicks[0] >= 0 && crossingTicks[0] <= 60,
+                            "Tactical evasion did not cross six blocks within three seconds");
+                    helper.assertTrue(firingTicks[0] >= 0 && firingTicks[0] <= 80,
+                            "Tactical evasion interrupted firing for over four seconds");
+                }
+                if (opponent == null && !replaceThreats && maneuverElapsed == 120) {
+                    LogUtils.getLogger().info("Helicopter tactical firing vehicle={} longestGap={} shots={} decision={}",
+                            helicopter, longestFiringGap[0], fixture.firedShots - maneuverShots[0], fixture.driverDecision);
+                    helper.assertTrue(longestFiringGap[0] <= 60,
+                            "Tactical maneuver and reengagement interrupted firing for over three seconds");
+                }
+            }
             if (replaceThreats && !checkedRelay[0]) {
                 if (fixture.evasionFinishes > 0) {
                     helper.assertTrue(fixture.evasionStarts == 1,
@@ -288,6 +330,14 @@ public final class HelicopterCombatGameTests {
                     fixture.targetFiredShots, fixture.firedShots - lateShots[0],
                     fixture.targetFiredShots - lateShots[1]);
             helper.assertTrue(maxCrossing[0] > 6.0D, "Airborne pressure never produced meaningful crossing");
+            if (opponent == null && !replaceThreats) {
+                helper.assertTrue(firstManeuverAt[0] >= 0 && crossingTicks[0] >= 0 && crossingTicks[0] <= 60,
+                        "Tactical evasion did not cross six blocks within three seconds");
+                helper.assertTrue(firingTicks[0] >= 0 && firingTicks[0] <= 80,
+                        "Tactical evasion interrupted firing for over four seconds");
+                helper.assertTrue(longestFiringGap[0] <= 60,
+                        "Tactical maneuver and reengagement interrupted firing for over three seconds");
+            }
             helper.assertTrue(!replaceThreats || checkedRelay[0], "Incoming crossing never finished");
             helper.assertTrue(fixture.firedShots > lateShots[0]
                             && (opponent == null || fixture.targetFiredShots > lateShots[1]),

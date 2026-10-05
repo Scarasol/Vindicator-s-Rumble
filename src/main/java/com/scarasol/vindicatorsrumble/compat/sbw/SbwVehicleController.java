@@ -339,13 +339,14 @@ public class SbwVehicleController implements VehicleController {
         short keys = this.toSbwFlightKeys(input);
         this.vehicle.processInput(keys);
         VehicleAiLogger.debugEvery(mob, 20,
-                "SBW flightInput vehicle={} seat={} keys={} input={} mouseX={} mouseY={} velocity={} hover={} power={} energy={}",
+                "SBW flightInput vehicle={} seat={} keys={} input={} mouseX={} mouseY={} rollTarget={} velocity={} hover={} power={} energy={}",
                 this.vehicle.getId(),
                 this.vehicle.getSeatIndex(mob),
                 keys,
                 input.input(),
                 input.mouseX(),
                 input.mouseY(),
+                input.rollTarget(),
                 this.vehicle.getDeltaMovement(),
                 this.vehicle.getHoverMode(),
                 this.vehicle.getPower(),
@@ -1408,6 +1409,17 @@ public class SbwVehicleController implements VehicleController {
         double mouseRollDemand = 0.25D * input.mouseX() * this.vehicle.getSynchedPropellerRot();
         double targetDeltaRot = -mouseRollDemand * FLIGHT_ROLL_COUNTER_RATIO;
         double deltaRot = this.vehicle.getDeltaRot();
+        if (Double.isFinite(input.rollTarget())
+                && this.vehicle.getEngineInfo() instanceof EngineInfo.Helicopter engine) {
+            double rollSpeed = engine.getRollSpeed() * (this.vehicle.getHoverMode() ? 0.05D : 1.0D);
+            double retainedRoll = this.vehicle.getRoll() * (this.vehicle.getHoverMode() ? 0.9603D : 0.99D);
+            targetDeltaRot -= Mth.clamp(Mth.wrapDegrees(input.rollTarget() - retainedRoll)
+                    / Math.max(0.01D, rollSpeed * 4.0D), -7.0D, 7.0D);
+            keys &= (short) ~(SBW_LEFT_KEY | SBW_RIGHT_KEY);
+            if (deltaRot < targetDeltaRot - 0.05D) keys |= SBW_LEFT_KEY;
+            if (deltaRot > targetDeltaRot + 0.05D) keys |= SBW_RIGHT_KEY;
+            return keys;
+        }
         if (input.input().left() && deltaRot >= targetDeltaRot) {
             keys &= (short) ~SBW_LEFT_KEY;
         }

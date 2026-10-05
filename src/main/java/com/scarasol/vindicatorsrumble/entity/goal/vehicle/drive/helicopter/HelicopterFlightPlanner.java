@@ -229,8 +229,7 @@ public final class HelicopterFlightPlanner {
                         stoppingDistance + MOVEMENT_MAX_REACHED_DISTANCE))));
         destination = new Vec3(destination.x, desiredY, destination.z);
         double projectedDistance = projectedSeparation.length();
-        String endReason = pressure == null ? "pressure_exit"
-                : this.evasionRemaining <= stoppingDistance ? "travel_budget"
+        String endReason = this.evasionRemaining <= stoppingDistance ? "travel_budget"
                 : separation.length() >= evasionDistance
                 || separation.dot(state.velocity().subtract(opponent.getDeltaMovement())) > 0.0D
                 && projectedDistance >= evasionDistance ? "range"
@@ -254,7 +253,7 @@ public final class HelicopterFlightPlanner {
                     targetId, this.evasionSourceId, this.evasionRemaining);
             return null;
         }
-        return plan(destination, destination, APPROACH_CRUISE_SPEED, false,
+        return plan(destination, targetCenter, VISIBILITY_RECOVERY_CRUISE_SPEED, false,
                 true, Phase.EVASIVE_PASS);
     }
 

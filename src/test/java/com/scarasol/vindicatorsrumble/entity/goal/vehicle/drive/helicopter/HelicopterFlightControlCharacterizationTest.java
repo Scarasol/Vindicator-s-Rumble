@@ -22,6 +22,7 @@ class HelicopterFlightControlCharacterizationTest {
             assertEquals(sample.expectedInput, bits(output.input()), sample.name + " input");
             assertEquals(sample.expectedMouseX, output.mouseX(), EPSILON, sample.name + " mouseX");
             assertEquals(sample.expectedMouseY, output.mouseY(), EPSILON, sample.name + " mouseY");
+            assertTrue(Double.isNaN(output.rollTarget()), sample.name + " bank profile");
         }
     }
 
@@ -38,6 +39,85 @@ class HelicopterFlightControlCharacterizationTest {
                     input.sprint(), input.up(), input.down(), input.fire(), true),
                     ordinary.mouseX(), ordinary.mouseY()), defensive, sample.name);
         }
+    }
+
+    @Test
+    void lateralMovementKeepsTargetYawAndBanksInEitherDirection() {
+        Vec3 position = new Vec3(0.0D, 32.0D, 0.0D);
+        for (double side : new double[]{-1.0D, 1.0D}) {
+            for (HelicopterFlightPlanner.Phase phase : new HelicopterFlightPlanner.Phase[]{
+                    HelicopterFlightPlanner.Phase.APPROACH, HelicopterFlightPlanner.Phase.EVASIVE_PASS}) {
+                HelicopterFlightPlanner.Plan strafe = plan(position.add(side * 16.0D, 0.0D, 0.0D),
+                        position.add(0.0D, 0.0D, 40.0D), 0.78D, false, true, phase);
+                VehicleFlightInput input = new HelicopterFlightControl().command(
+                        state(position, Vec3.ZERO, 0.0F, 0.0F, 0.0F,
+                                true, true, 0.09F, 32.0D), strafe.flightRequest(), HelicopterEnvironment.NONE);
+                assertEquals(0.0D, input.mouseX(), EPSILON, phase.name());
+                assertEquals(0.0D, input.mouseY(), EPSILON, phase.name());
+                assertEquals(side > 0.0D, input.input().left(), phase.name());
+                assertEquals(side < 0.0D, input.input().right(), phase.name());
+                assertEquals(-side, Math.signum(input.rollTarget()), EPSILON, phase.name());
+                assertTrue(Math.abs(input.rollTarget()) < 30.0D);
+                assertTrue(input.input().up(), "Sideways movement must release hover immediately");
+            }
+        }
+    }
+
+    @Test
+    void lateralBankingLevelsForAnObstacleAndDoesNotBankWithoutAnEngine() {
+        Vec3 position = new Vec3(0.0D, 32.0D, 0.0D);
+        HelicopterFlightPlanner.Plan strafe = plan(position.add(-16.0D, 0.0D, 0.0D),
+                position.add(0.0D, 0.0D, 40.0D), 0.78D, false, true, HelicopterFlightPlanner.Phase.APPROACH);
+        HelicopterEnvironment obstacle = new HelicopterEnvironment(true, true, false,
+                0, Double.NaN, 2.0D, 2.0D);
+        VehicleFlightInput stopped = new HelicopterFlightControl().command(
+                state(position, new Vec3(-0.5D, 0.0D, 0.0D), 0.0F, 0.0F, 15.0F,
+                        false, true, 0.09F, 32.0D), strafe.flightRequest(), obstacle);
+        assertTrue(stopped.input().up());
+        assertTrue(stopped.input().left());
+        assertFalse(stopped.input().right());
+        VehicleFlightInput unpowered = new HelicopterFlightControl().command(
+                state(position, Vec3.ZERO, 0.0F, 0.0F, 0.0F,
+                        false, false, 0.0F, 32.0D), strafe.flightRequest(), HelicopterEnvironment.NONE);
+        assertFalse(unpowered.input().left());
+        assertFalse(unpowered.input().right());
+        assertTrue(Double.isNaN(unpowered.rollTarget()));
+    }
+
+    @Test
+    void endingASidewaysMovementLevelsTheResidualBank() {
+        Vec3 position = new Vec3(0.0D, 32.0D, 0.0D);
+        HelicopterFlightControl control = new HelicopterFlightControl();
+        HelicopterFlightPlanner.Plan strafe = plan(position.add(-16.0D, 0.0D, 0.0D),
+                position.add(0.0D, 0.0D, 40.0D), 0.78D, false, true, HelicopterFlightPlanner.Phase.APPROACH);
+        control.command(state(position, Vec3.ZERO, 0.0F, 0.0F, 12.0F,
+                false, true, 0.09F, 32.0D), strafe.flightRequest(), HelicopterEnvironment.NONE);
+        HelicopterFlightPlanner.Plan hover = plan(position, position.add(0.0D, 0.0D, 40.0D),
+                0.0D, true, true, HelicopterFlightPlanner.Phase.COMBAT_HOVER);
+        VehicleFlightInput input = control.command(
+                state(position, new Vec3(-0.3D, 0.0D, 0.0D), 0.0F, 0.0F, 14.0F,
+                        false, true, 0.09F, 32.0D), hover.flightRequest(), HelicopterEnvironment.NONE);
+        assertTrue(input.input().left());
+        assertFalse(input.input().right());
+        assertEquals(0.0D, input.rollTarget(), EPSILON);
+    }
+
+    @Test
+    void intentionalBankDoesNotAddAnUnrequestedYawCorrection() {
+        Vec3 position = new Vec3(0.0D, 32.0D, 0.0D);
+        HelicopterFlightPlanner.Plan strafe = plan(position.add(-16.0D, 0.0D, 0.0D),
+                position.add(0.0D, 0.0D, 40.0D), 0.78D, false, true, HelicopterFlightPlanner.Phase.APPROACH);
+        HelicopterFlightPlanner.AircraftState aircraft = state(
+                position, Vec3.ZERO, 0.0F, 0.0F, 20.0F, false, true, 0.09F, 32.0D);
+        VehicleFlightInput ordinary = new HelicopterFlightControl().command(
+                aircraft, strafe.flightRequest(), HelicopterEnvironment.NONE);
+        VehicleFlightInput defensive = new HelicopterFlightControl().command(
+                aircraft, strafe.flightRequest(), HelicopterEnvironment.NONE, true);
+        assertEquals(0.0D, ordinary.mouseX(), EPSILON);
+        assertEquals(ordinary.rollTarget(), defensive.rollTarget(), EPSILON);
+        assertEquals(ordinary.mouseX(), defensive.mouseX(), EPSILON);
+        assertEquals(ordinary.mouseY(), defensive.mouseY(), EPSILON);
+        assertTrue(defensive.input().decoy());
     }
 
     @Test
