@@ -56,6 +56,12 @@ public final class HelicopterFlightPlanner {
     private Vec3 evasionDirection;
     @Nullable
     private Vec3 evasionPosition;
+    @Nullable
+    private Vec3 evasionSeparation;
+    @Nullable
+    private Vec3 evasionSourceFacing;
+    @Nullable
+    private Vec3 previousEvasionDirection;
     private double evasionRemaining;
     private long lastEvasionTick = Long.MIN_VALUE;
 
@@ -165,88 +171,121 @@ public final class HelicopterFlightPlanner {
         if (environment == HelicopterEnvironment.NONE) return null;
         int targetId = target.getId();
         long gameTime = controller.level().getGameTime();
-        double evasionDistance = Math.min(followRange - DIVE_PASS_RANGE_MARGIN,
-                combatDistance + OUTER_COMBAT_TOLERANCE);
+        double evasionDistance = Math.max(0.0D, followRange - DIVE_PASS_RANGE_MARGIN);
         if (this.evasionTargetId != targetId
                 || this.lastEvasionTick != Long.MIN_VALUE
                 && (gameTime < this.lastEvasionTick || gameTime > this.lastEvasionTick + 1L)) {
             this.clearEvasion();
         }
-        this.lastEvasionTick = gameTime;
         this.evasionTargetId = targetId;
-        if (pressure == null && this.evasionDirection == null) {
-            this.evasionSourceId = -1;
+        boolean alreadyPlanned = this.lastEvasionTick == gameTime;
+        this.lastEvasionTick = gameTime;
+        if (this.evasionDirection == null && (pressure == null || alreadyPlanned)) {
             return null;
         }
-        if (this.evasionDirection == null && this.evasionSourceId == pressure.getId()) return null;
         double stoppingDistance = Math.max(0.0D, controller.estimatedStabilizedHorizontalStoppingDistance());
         Entity opponent = target.getRootVehicle();
         Vec3 separation = state.position().subtract(opponent.getBoundingBox().getCenter())
                 .multiply(1.0D, 0.0D, 1.0D);
-        double opponentStoppingDistance = VehicleControllers.create(opponent)
-                .map(VehicleController::estimatedStabilizedHorizontalStoppingDistance).orElse(0.0D);
+        Vec3 velocity = state.velocity().multiply(1.0D, 0.0D, 1.0D);
+        Vec3 opponentVelocity = opponent.getDeltaMovement().multiply(1.0D, 0.0D, 1.0D);
+        VehicleController opponentController = VehicleControllers.create(opponent).orElse(null);
+        double opponentStoppingDistance = opponentController == null ? 0.0D
+                : opponentController.estimatedStabilizedHorizontalStoppingDistance();
         Vec3 projectedSeparation = separation
-                .add(state.velocity().multiply(1.0D, 0.0D, 1.0D).normalize().scale(stoppingDistance))
-                .subtract(opponent.getDeltaMovement().multiply(1.0D, 0.0D, 1.0D).normalize()
-                        .scale(Math.max(0.0D, opponentStoppingDistance)));
-        if (this.evasionDirection == null && pressure != null
-                && this.evasionSourceId != pressure.getId()) {
-            this.evasionSourceId = pressure.getId();
+                .add(velocity.normalize().scale(stoppingDistance))
+                .subtract(opponentVelocity.normalize().scale(Math.max(0.0D, opponentStoppingDistance)));
+        boolean rangeUnsafe = separation.dot(velocity.subtract(opponentVelocity)) >= 0.0D
+                && Math.max(separation.length(), projectedSeparation.length()) >= evasionDistance;
+        if (this.evasionDirection == null) {
+            if (rangeUnsafe) return null;
+            if (!incoming && this.evasionSourceId == pressure.getId() && this.evasionSeparation != null) {
+                Vec3 oldSide = rotate(this.evasionSeparation.normalize(), 90.0D);
+                double crossing = Math.abs(separation.subtract(this.evasionSeparation).dot(oldSide));
+                double tracking = Math.abs(this.evasionSourceFacing.cross(
+                        pressure.getViewVector(1.0F).multiply(1.0D, 0.0D, 1.0D).normalize()).y)
+                        * this.evasionSeparation.length();
+                // A persistent source must track a real crossing, or regain meaningful range room.
+                if (stoppingDistance > DIVE_PASS_START_STOPPING_DISTANCE || Math.abs(state.roll()) > 5.0D
+                        || !(crossing >= MOVEMENT_MIN_REACHED_DISTANCE && tracking >= MOVEMENT_MIN_REACHED_DISTANCE
+                        || this.evasionSeparation.length() - separation.length() >= MOVEMENT_MAX_REACHED_DISTANCE)) {
+                    return null;
+                }
+            }
             double budget = Math.min(combatDistance, evasionDistance)
                     * (0.25D + controller.level().random.nextDouble() * 0.1D);
+            // Two maneuver-capable aircraft can both contribute to the relative crossing.
+            if (!incoming && opponentController != null && opponentController.supportsFlightControl()
+                    && opponentController.engineStarted()) budget *= 0.5D;
             Vec3 axis = horizontalUnit(incoming ? state.velocity().subtract(pressure.getDeltaMovement())
                     : state.position().subtract(pressure.position()), state);
-            double totalWeight = 0.0D;
+            Vec3 side = rotate(axis, 90.0D);
+            double opponentSideSpeed = opponentVelocity.dot(side);
+            int preferredSide = Math.abs(opponentSideSpeed) > MOVEMENT_PASS_SPEED ? opponentSideSpeed > 0 ? -1 : 1
+                    : ((controller.entity().getUUID().hashCode() ^ opponent.getUUID().hashCode()) & 1) == 0 ? -1 : 1;
+            double bestScore = Double.NEGATIVE_INFINITY;
             for (double angle : EVASION_ANGLES) {
                 Vec3 direction = rotate(axis, angle);
                 Vec3 destination = state.position().add(direction.scale(budget));
                 destination = new Vec3(destination.x, desiredY, destination.z);
-                if (projectedSeparation.add(direction.scale(budget)).length() >= evasionDistance
+                if (this.previousEvasionDirection != null
+                        && direction.dot(this.previousEvasionDirection) > 0.0D) continue;
+                double endDistance = projectedSeparation.add(direction.scale(budget)).length();
+                if (budget <= stoppingDistance * Math.max(0.0D, velocity.normalize().dot(direction))
+                        || endDistance >= evasionDistance
                         || !this.visibilityRecovery.directDestinationClear(
                         controller, targetCenter, state.position(), destination)) continue;
-                // Randomize only among safe crossings; current inertia is a small preference.
-                double weight = 1.0D + 0.2D * direction.dot(
-                        state.velocity().multiply(1.0D, 0.0D, 1.0D).normalize());
-                totalWeight += weight;
-                if (controller.level().random.nextDouble() * totalWeight < weight) this.evasionDirection = direction;
+                double transverse = direction.dot(side) * VISIBILITY_RECOVERY_CRUISE_SPEED - opponentSideSpeed;
+                double score = Math.abs(transverse) + 0.25D * Math.signum(angle) * preferredSide
+                        - Math.max(0.0D, endDistance - combatDistance - OUTER_COMBAT_TOLERANCE) / budget
+                        + controller.level().random.nextDouble() * 0.08D;
+                if (score > bestScore) {
+                    bestScore = score;
+                    this.evasionDirection = direction;
+                }
             }
             if (this.evasionDirection != null) {
+                this.evasionSourceId = pressure.getId();
                 this.evasionRemaining = budget;
                 this.evasionPosition = state.position();
+                this.evasionSeparation = separation;
+                this.evasionSourceFacing = pressure.getViewVector(1.0F).multiply(1.0D, 0.0D, 1.0D).normalize();
                 this.clearRetreatRoute();
                 VehicleAiLogger.debug(controller.entity(),
-                        "Helicopter evasion started target={} source={} incoming={} direction={} budget={} limit={}",
-                        targetId, this.evasionSourceId, incoming, this.evasionDirection, budget, evasionDistance);
+                        "Helicopter evasion started target={} source={} incoming={} direction={} budget={} limit={} score={} separation={}",
+                        targetId, this.evasionSourceId, incoming, this.evasionDirection, budget, evasionDistance,
+                        bestScore, separation);
             }
         }
         if (this.evasionDirection == null) return null;
         if (pressure != null) this.evasionSourceId = pressure.getId();
         // Repeated same-tick selections consume zero extra distance and never resample the segment.
-        this.evasionRemaining -= horizontalDistance(state.position(), this.evasionPosition);
+        this.evasionRemaining -= Math.max(0.0D, state.position().subtract(this.evasionPosition)
+                .dot(this.evasionDirection));
         this.evasionPosition = state.position();
+        double directionalStopping = stoppingDistance * Math.max(0.0D, velocity.normalize().dot(this.evasionDirection));
         Vec3 destination = state.position().add(this.evasionDirection.scale(
                 Math.min(this.evasionRemaining, Math.max(MOVEMENT_PASS_DISTANCE,
-                        stoppingDistance + MOVEMENT_MAX_REACHED_DISTANCE))));
+                        directionalStopping + MOVEMENT_MAX_REACHED_DISTANCE))));
         destination = new Vec3(destination.x, desiredY, destination.z);
         double projectedDistance = projectedSeparation.length();
-        String endReason = this.evasionRemaining <= stoppingDistance ? "travel_budget"
-                : separation.length() >= evasionDistance
-                || separation.dot(state.velocity().subtract(opponent.getDeltaMovement())) > 0.0D
-                && projectedDistance >= evasionDistance ? "range"
+        String endReason = this.evasionRemaining <= directionalStopping ? "travel_budget"
+                : rangeUnsafe ? "range"
                 : !this.visibilityRecovery.directDestinationClear(
                 controller, targetCenter, state.position(), destination) ? "corridor" : null;
         if (!this.evasionBraking && endReason != null) {
             this.evasionBraking = true;
             VehicleAiLogger.debug(controller.entity(),
-                    "Helicopter evasive braking target={} reason={} remaining={} distance={} projectedDistance={} limit={} stoppingDistance={} opponentStoppingDistance={}",
+                    "Helicopter evasive braking target={} reason={} remaining={} distance={} projectedDistance={} limit={} stoppingDistance={} opponentStoppingDistance={} directionalStopping={}",
                     targetId, endReason, this.evasionRemaining, separation.length(), projectedDistance, evasionDistance,
-                    stoppingDistance, opponentStoppingDistance);
+                    stoppingDistance, opponentStoppingDistance, directionalStopping);
         }
         if (this.evasionBraking) {
-            if (stoppingDistance > DIVE_PASS_START_STOPPING_DISTANCE) {
+            if (stoppingDistance > DIVE_PASS_START_STOPPING_DISTANCE || Math.abs(state.roll()) > 5.0D) {
                 return divePassAlignmentPlan(state, targetCenter, desiredY);
             }
             this.evasionBraking = false;
+            this.previousEvasionDirection = this.evasionDirection;
             this.evasionDirection = null;
             this.evasionPosition = null;
             VehicleAiLogger.debug(controller.entity(), "Helicopter evasion finished target={} source={} remaining={}",
@@ -263,6 +302,9 @@ public final class HelicopterFlightPlanner {
         this.evasionDirection = null;
         this.evasionBraking = false;
         this.evasionPosition = null;
+        this.evasionSeparation = null;
+        this.evasionSourceFacing = null;
+        this.previousEvasionDirection = null;
         this.evasionRemaining = 0.0D;
         this.lastEvasionTick = Long.MIN_VALUE;
     }

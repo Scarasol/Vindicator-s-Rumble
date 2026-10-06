@@ -82,13 +82,18 @@ public final class HelicopterCombatGameTests {
 
     private static void verifyLockedDefense(GameTestHelper helper, String helicopter, int decoys) {
         Fixture fixture = new Fixture(helper, helicopter, 0.0D);
+        SbwGameTestVehicle.increaseCombatFixtureDurability(fixture.vehicle);
+        SbwGameTestVehicle.increaseCombatFixtureDurability(fixture.targetVehicle);
         SbwGameTestVehicle.setDecoyStock(fixture.vehicle, decoys);
         long[] started = {-1};
         Vec3[] initialPosition = {null};
         double[] maxDisplacement = {0.0D};
+        double[] maxDistance = {0.0D};
+        List<String> trace = new ArrayList<>();
         int[] firstRelease = {-1};
         helper.onEachTick(() -> {
             if (fixture.driver.getTarget() != fixture.target) {
+                if (started[0] >= 0) trace.forEach(line -> LogUtils.getLogger().info("Helicopter defense trace {}", line));
                 helper.assertTrue(started[0] < 0, "Defensive maneuver abandoned its acquired combat target");
                 helper.assertTrue(helper.getTick() < 100, "Defense fixture failed natural target acquisition");
                 return;
@@ -99,6 +104,14 @@ public final class HelicopterCombatGameTests {
                 VehicleThreats.report(fixture.targetVehicle, fixture.vehicle, VehicleThreats.Stage.LOCKED, 100);
             }
             int elapsed = (int) (helper.getTick() - started[0]);
+            double distance = fixture.vehicle.position().subtract(fixture.targetVehicle.position()).horizontalDistance();
+            maxDistance[0] = Math.max(maxDistance[0], distance);
+            trace.add("vehicle=" + helicopter + " elapsed=" + elapsed + " distance=" + distance
+                    + " position=" + fixture.vehicle.position() + " velocity=" + fixture.vehicle.getDeltaMovement()
+                    + " targetPosition=" + fixture.targetVehicle.position()
+                    + " targetVelocity=" + fixture.targetVehicle.getDeltaMovement()
+                    + " decision=" + fixture.driverDecision);
+            if (distance >= 64.0D) trace.forEach(line -> LogUtils.getLogger().info("Helicopter defense trace {}", line));
             int stock = SbwGameTestVehicle.decoyStock(fixture.vehicle);
             if (stock < decoys && firstRelease[0] < 0) firstRelease[0] = elapsed;
             if (firstRelease[0] >= 0) {
@@ -113,12 +126,10 @@ public final class HelicopterCombatGameTests {
                     "Lock evasion introduced a steep ground attack dive");
             helper.assertTrue(fixture.vehicle.getY() >= fixture.origin.getY() + 12.0D,
                     "Lock evasion lost safe ground clearance");
-            helper.assertTrue(fixture.vehicle.position().subtract(fixture.targetVehicle.position())
-                    .horizontalDistance() < 64.0D, "Defense left acquisition range");
+            helper.assertTrue(distance < 64.0D, "Defense left acquisition range");
             if (elapsed < 180) return;
-            LogUtils.getLogger().info("Helicopter defense vehicle={} initialDecoys={} remainingDecoys={} firstRelease={} maxDisplacement={} finalDistance={}",
-                    helicopter, decoys, stock, firstRelease[0], maxDisplacement[0],
-                    fixture.vehicle.position().subtract(fixture.targetVehicle.position()).horizontalDistance());
+            LogUtils.getLogger().info("Helicopter defense vehicle={} initialDecoys={} remainingDecoys={} firstRelease={} maxDisplacement={} maxDistance={} finalDistance={}",
+                    helicopter, decoys, stock, firstRelease[0], maxDisplacement[0], maxDistance[0], distance);
             helper.assertTrue(maxDisplacement[0] > 6.0D, "Lock pressure never produced a maneuver");
             helper.assertTrue(decoys == 0 ? stock == 0 : firstRelease[0] >= 0,
                     "Countermeasure capability was not respected");
@@ -168,6 +179,26 @@ public final class HelicopterCombatGameTests {
     }
 
     @GameTest(batch = "helicopter_combat", template = "empty", timeoutTicks = 1000)
+    public static void identicalMi28sProduceRelativeMovementWithoutOrbiting(GameTestHelper helper) {
+        verifyTacticalEvasion(helper, "mi_28", "mi_28");
+    }
+
+    @GameTest(batch = "helicopter_combat", template = "empty", timeoutTicks = 1000)
+    public static void rotatedIdenticalPilotsDoNotTranslateTogether(GameTestHelper helper) {
+        verifyTacticalEvasion(helper, "ah_6", "ah_6", false, 40, 0.0D, 73.0F);
+    }
+
+    @GameTest(batch = "helicopter_combat", template = "empty", timeoutTicks = 1000)
+    public static void outwardMi28InertiaDoesNotConsumeTheSidewaysManeuver(GameTestHelper helper) {
+        verifyTacticalEvasion(helper, "mi_28", "mi_28", false, 34, -0.2D, 0.0F);
+    }
+
+    @GameTest(batch = "helicopter_combat", template = "empty", timeoutTicks = 1000)
+    public static void inwardAirborneMotionDoesNotImmediatelyCancelAnAcceptedManeuver(GameTestHelper helper) {
+        verifyTacticalEvasion(helper, "ah_6", "mi_28", false, 47, 0.3D, 0.0F);
+    }
+
+    @GameTest(batch = "helicopter_combat", template = "empty", timeoutTicks = 1000)
     public static void changingIncomingSourcesDoesNotExtendTheActiveCrossing(GameTestHelper helper) {
         verifyTacticalEvasion(helper, "ah_6", null, true);
     }
@@ -178,10 +209,23 @@ public final class HelicopterCombatGameTests {
 
     private static void verifyTacticalEvasion(GameTestHelper helper, String helicopter, String opponent,
                                              boolean replaceThreats) {
-        Fixture fixture = new Fixture(helper, helicopter, 0.0D, opponent);
+        verifyTacticalEvasion(helper, helicopter, opponent, replaceThreats, 40, 0.0D, 0.0F);
+    }
+
+    private static void verifyTacticalEvasion(GameTestHelper helper, String helicopter, String opponent,
+                                             boolean replaceThreats, int initialDistance,
+                                             double initialClosingSpeed, float initialYaw) {
+        Fixture fixture = new Fixture(helper, helicopter, 0.0D, opponent, initialDistance);
+        double radians = Math.toRadians(initialYaw);
+        Vec3 forward = new Vec3(-Math.sin(radians), 0.0D, Math.cos(radians));
+        Vec3 initialSide = new Vec3(-forward.z, 0.0D, forward.x);
+        fixture.vehicle.setYRot(initialYaw);
+        fixture.targetVehicle.setYRot(initialYaw + 180.0F);
+        fixture.targetVehicle.setPos(fixture.vehicle.position().add(forward.scale(initialDistance)));
+        fixture.vehicle.setDeltaMovement(forward.scale(initialClosingSpeed));
+        fixture.targetVehicle.setDeltaMovement(forward.scale(-initialClosingSpeed));
         VehicleController opposingController = VehicleControllers.create(fixture.targetVehicle).orElseThrow();
         if (opponent == null) {
-            fixture.targetVehicle.setYRot(180.0F);
             SbwGameTestVehicle.prepareStationaryAirborneTarget(fixture.targetVehicle);
             SbwGameTestVehicle.increaseCombatFixtureDurability(fixture.vehicle);
         }
@@ -198,6 +242,10 @@ public final class HelicopterCombatGameTests {
         int[] lateShots = {0, 0};
         long[] firstManeuverAt = {-1};
         Vec3[] maneuverPosition = {null};
+        Vec3[] maneuverSeparation = {null};
+        Vec3[] maneuverSide = {null};
+        double[] relativeCrossing = {0.0D};
+        long[] relativeCrossingTicks = {-1};
         int[] maneuverShots = {0};
         long[] crossingTicks = {-1};
         long[] firingTicks = {-1};
@@ -228,13 +276,20 @@ public final class HelicopterCombatGameTests {
             if (firstManeuverAt[0] < 0 && fixture.evasionStarts > 0) {
                 firstManeuverAt[0] = helper.getTick();
                 maneuverPosition[0] = fixture.vehicle.position();
+                maneuverSeparation[0] = fixture.vehicle.position().subtract(fixture.targetVehicle.position())
+                        .multiply(1.0D, 0.0D, 1.0D);
+                maneuverSide[0] = new Vec3(-maneuverSeparation[0].z, 0.0D, maneuverSeparation[0].x).normalize();
                 maneuverShots[0] = fixture.firedShots;
                 observedShots[0] = fixture.firedShots;
                 lastManeuverShot[0] = helper.getTick();
             }
             if (firstManeuverAt[0] >= 0) {
                 long maneuverElapsed = helper.getTick() - firstManeuverAt[0];
-                double crossing = Math.abs(fixture.vehicle.getX() - maneuverPosition[0].x);
+                double crossing = Math.abs(fixture.vehicle.position().subtract(maneuverPosition[0]).dot(maneuverSide[0]));
+                double relative = Math.abs(fixture.vehicle.position().subtract(fixture.targetVehicle.position())
+                        .subtract(maneuverSeparation[0]).dot(maneuverSide[0]));
+                relativeCrossing[0] = Math.max(relativeCrossing[0], relative);
+                if (relativeCrossingTicks[0] < 0 && relative >= 6.0D) relativeCrossingTicks[0] = maneuverElapsed;
                 peakSpeed[0] = Math.max(peakSpeed[0], fixture.vehicle.getDeltaMovement().horizontalDistance());
                 if (crossingTicks[0] < 0 && crossing >= 6.0D) crossingTicks[0] = maneuverElapsed;
                 if (firingTicks[0] < 0 && fixture.firedShots > maneuverShots[0]) firingTicks[0] = maneuverElapsed;
@@ -257,7 +312,18 @@ public final class HelicopterCombatGameTests {
                     helper.assertTrue(longestFiringGap[0] <= 60,
                             "Tactical maneuver and reengagement interrupted firing for over three seconds");
                 }
+                if (opponent != null && maneuverElapsed == 120) {
+                    LogUtils.getLogger().info("Helicopter tactical relative response vehicles={}/{} initialDistance={} initialYaw={} initialClosingSpeed={} relativeCrossingTicks={} relativeCrossing={} longestGap={} shots={}/{} decisions={}/{}",
+                            helicopter, opponent, initialDistance, initialYaw, initialClosingSpeed,
+                            relativeCrossingTicks[0], relativeCrossing[0], longestFiringGap[0],
+                            fixture.firedShots, fixture.targetFiredShots, fixture.driverDecision, fixture.targetDecision);
+                    helper.assertTrue(relativeCrossingTicks[0] >= 0 && relativeCrossingTicks[0] <= 60,
+                            "Opposing aircraft did not produce six blocks of relative sideways movement in three seconds");
+                    helper.assertTrue(longestFiringGap[0] <= 60,
+                            "Relative evasion interrupted firing for over three seconds");
+                }
             }
+            helper.assertTrue(fixture.sameTickAborts == 0, "An accepted maneuver was cancelled in its start tick");
             if (replaceThreats && !checkedRelay[0]) {
                 if (fixture.evasionFinishes > 0) {
                     helper.assertTrue(fixture.evasionStarts == 1,
@@ -295,7 +361,7 @@ public final class HelicopterCombatGameTests {
             maxTurn[0] = Math.max(maxTurn[0], Math.abs(turn[0]));
             maxDistance[0] = Math.max(maxDistance[0], distance);
             maxCrossing[0] = Math.max(maxCrossing[0],
-                    Math.abs(fixture.vehicle.getX() - initialPosition[0].x));
+                    Math.abs(fixture.vehicle.position().subtract(initialPosition[0]).dot(initialSide)));
             double range = opponent == null ? fixture.driver.getAttributeValue(Attributes.FOLLOW_RANGE)
                     : Math.min(fixture.driver.getAttributeValue(Attributes.FOLLOW_RANGE),
                     fixture.target.getAttributeValue(Attributes.FOLLOW_RANGE));
@@ -318,18 +384,25 @@ public final class HelicopterCombatGameTests {
                 lateShots[1] = fixture.targetFiredShots;
             }
             if (elapsed % 20 == 0) {
-                LogUtils.getLogger().info("Helicopter tactical tick vehicles={}/{} elapsed={} distance={} maxDistance={} cross={} relativeTurn={} shots={}/{} decisions={}/{}",
+                LogUtils.getLogger().info("Helicopter tactical tick vehicles={}/{} elapsed={} distance={} maxDistance={} cross={} relativeCross={} relativeTurn={} shots={}/{} decisions={}/{}",
                         helicopter, opponent, elapsed, distance, maxDistance[0], maxCrossing[0],
-                        turn[0], fixture.firedShots, fixture.targetFiredShots,
+                        relativeCrossing[0], turn[0], fixture.firedShots, fixture.targetFiredShots,
                         fixture.driverDecision, fixture.targetDecision);
             }
             if (elapsed < 720) return;
-            LogUtils.getLogger().info("Helicopter tactical summary vehicles={}/{} crossing={} maxDistance={} highest={} initialHeight={} maxRelativeTurn={} segments={}/{} shots={}/{} lateShots={}/{}",
-                    helicopter, opponent, maxCrossing[0], maxDistance[0], highest[0], initialHeight, maxTurn[0],
-                    fixture.evasionStarts, fixture.targetEvasionStarts, fixture.firedShots,
+            LogUtils.getLogger().info("Helicopter tactical summary vehicles={}/{} crossing={} relativeCrossing={} relativeCrossingTicks={} maxDistance={} highest={} initialHeight={} maxRelativeTurn={} segments={}/{} sameTickAborts={} shots={}/{} lateShots={}/{}",
+                    helicopter, opponent, maxCrossing[0], relativeCrossing[0], relativeCrossingTicks[0],
+                    maxDistance[0], highest[0], initialHeight, maxTurn[0],
+                    fixture.evasionStarts, fixture.targetEvasionStarts, fixture.sameTickAborts, fixture.firedShots,
                     fixture.targetFiredShots, fixture.firedShots - lateShots[0],
                     fixture.targetFiredShots - lateShots[1]);
             helper.assertTrue(maxCrossing[0] > 6.0D, "Airborne pressure never produced meaningful crossing");
+            if (opponent != null) {
+                helper.assertTrue(relativeCrossingTicks[0] >= 0 && relativeCrossingTicks[0] <= 60,
+                        "Opposing pilots only translated in parallel instead of making an effective crossing");
+                helper.assertTrue(fixture.evasionStarts > 1 || fixture.targetEvasionStarts > 1,
+                        "Tracking pilots never reacted to a new spatial firing opportunity");
+            }
             if (opponent == null && !replaceThreats) {
                 helper.assertTrue(firstManeuverAt[0] >= 0 && crossingTicks[0] >= 0 && crossingTicks[0] <= 60,
                         "Tactical evasion did not cross six blocks within three seconds");
@@ -592,6 +665,9 @@ public final class HelicopterCombatGameTests {
         int evasionStarts;
         int targetEvasionStarts;
         int evasionFinishes;
+        int sameTickAborts;
+        long lastEvasionStart = Long.MIN_VALUE;
+        long lastTargetEvasionStart = Long.MIN_VALUE;
         String driverDecision;
         String targetDecision;
         String targetEvent;
@@ -608,14 +684,14 @@ public final class HelicopterCombatGameTests {
             CommonConfig.VEHICLE_AI_DEBUG.set(true);
             this.level = helper.getLevel();
             this.origin = new BlockPos(4096 + ARENA.getAndIncrement() * 256, 5, 4096);
-            for (int x = -3; x <= 3; x++) {
+            for (int x = -5; x <= 5; x++) {
                 for (int z = -3; z <= 7; z++) {
                     BlockPos chunk = new BlockPos((this.origin.getX() >> 4) + x, 0, (this.origin.getZ() >> 4) + z);
                     this.level.setChunkForced(chunk.getX(), chunk.getZ(), true);
                     this.chunks.add(chunk);
                 }
             }
-            for (int x = -32; x <= 32; x++) {
+            for (int x = -64; x <= 64; x++) {
                 for (int z = -32; z <= 112; z++) {
                     this.level.setBlock(this.origin.offset(x, -1, z), Blocks.BEDROCK.defaultBlockState(), 2);
                 }
@@ -668,10 +744,20 @@ public final class HelicopterCombatGameTests {
                             || message.contains("Helicopter evasive braking")
                             || message.contains("Helicopter evasion finished")) {
                         if (message.contains(vehiclePrefix)) {
-                            if (message.contains("started")) evasionStarts++;
+                            if (message.contains("started")) {
+                                evasionStarts++;
+                                lastEvasionStart = level.getGameTime();
+                            }
+                            if (message.contains("braking") && lastEvasionStart == level.getGameTime()) sameTickAborts++;
                             if (message.contains("finished")) evasionFinishes++;
                         }
-                        if (message.contains(targetVehiclePrefix) && message.contains("started")) targetEvasionStarts++;
+                        if (message.contains(targetVehiclePrefix)) {
+                            if (message.contains("started")) {
+                                targetEvasionStarts++;
+                                lastTargetEvasionStart = level.getGameTime();
+                            }
+                            if (message.contains("braking") && lastTargetEvasionStart == level.getGameTime()) sameTickAborts++;
+                        }
                         if (message.contains(vehiclePrefix) || message.contains(targetVehiclePrefix)) {
                             LogUtils.getLogger().info("Helicopter maneuver event {}", message);
                         }
