@@ -22,11 +22,23 @@ final class GroundSteering {
 
     static SteeringResult steerToward(VehicleController controller, Vec3 waypoint, double remainingDistanceSqr,
                                      boolean preferStableFire, int previousTurnDirection) {
+        return steerToward(controller, waypoint, remainingDistanceSqr, true, preferStableFire, previousTurnDirection);
+    }
+
+    static SteeringResult steerToward(VehicleController controller, Vec3 waypoint, double remainingDistanceSqr,
+                                     boolean stopAtWaypoint, boolean preferStableFire, int previousTurnDirection) {
+        return steerToward(controller, waypoint, remainingDistanceSqr, stopAtWaypoint, preferStableFire,
+                previousTurnDirection, false);
+    }
+
+    static SteeringResult steerToward(VehicleController controller, Vec3 waypoint, double remainingDistanceSqr,
+                                     boolean stopAtWaypoint, boolean preferStableFire, int previousTurnDirection,
+                                     boolean continuingReverseTurn) {
         Vec3 position = controller.position();
         double dx = waypoint.x - position.x;
         double dz = waypoint.z - position.z;
         double distanceSqr = dx * dx + dz * dz;
-        if (distanceSqr < 4.0D) {
+        if (stopAtWaypoint && distanceSqr < 4.0D) {
             return new SteeringResult(brake(controller), 0);
         }
 
@@ -39,13 +51,15 @@ final class GroundSteering {
         double yaw = Math.toRadians(controller.yaw());
         double longitudinalSpeed = -controller.velocity().x * Math.sin(yaw) + controller.velocity().z * Math.cos(yaw);
         boolean backing = longitudinalSpeed < -0.01D;
-        boolean tightTurn = needsTurningRoom(controller, waypoint);
-        boolean targetBehind = absDiff > 155.0F && (type == VehicleMovementType.WHEEL || distanceSqr < 25.0D);
+        boolean tightTurn = ((stopAtWaypoint || absDiff >= 75.0F) && needsTurningRoom(controller, waypoint))
+                || (continuingReverseTurn && absDiff > 35.0F);
+        boolean targetBehind = !continuingReverseTurn && absDiff > 155.0F
+                && (type == VehicleMovementType.WHEEL || distanceSqr < 25.0D);
         boolean reverse = (tightTurn || targetBehind) && (backing || horizontalSpeedSqr < TURN_BRAKE_SPEED_SQR);
         int turnDirection = turnDirection(reverse && targetBehind ? Mth.wrapDegrees(diff + 180.0F) : diff,
                 turnThreshold, previousTurnDirection);
-        boolean left = reverse || backing ? turnDirection > 0 : turnDirection < 0;
-        boolean right = reverse || backing ? turnDirection < 0 : turnDirection > 0;
+        boolean left = reverse ? turnDirection > 0 : turnDirection < 0;
+        boolean right = reverse ? turnDirection < 0 : turnDirection > 0;
         float brakeAngle = preferStableFire ? 65.0F : 95.0F;
         float forwardAngle = preferStableFire ? 80.0F : 135.0F;
         boolean brake = !reverse && (tightTurn || absDiff > brakeAngle || backing) && horizontalSpeedSqr > TURN_BRAKE_SPEED_SQR;
@@ -63,9 +77,17 @@ final class GroundSteering {
         if (distanceSqr < 1.0E-4D) {
             return new SteeringResult(VehicleInput.NONE, 0);
         }
-
         float targetYaw = (float) (Mth.atan2(dz, dx) * (180F / Math.PI)) - 90.0F;
         float diff = Mth.wrapDegrees(targetYaw - controller.yaw());
+        if (Math.abs(diff) > 155.0F && controller.movementType() == VehicleMovementType.WHEEL
+                && controller.estimatedGroundTurningRadius() > 0.0D) {
+            // A rear target lies outside the forward turning circles but still needs a powered turn.
+            return steerToward(controller, waypoint, distanceSqr, false, false, previousTurnDirection, true);
+        }
+        boolean closeAngledTarget = distanceSqr < 36.0D && Math.abs(diff) >= 18.0F;
+        if ((closeAngledTarget || Math.abs(diff) >= 75.0F) && needsTurningRoom(controller, waypoint)) {
+            return steerToward(controller, waypoint, distanceSqr, closeAngledTarget, false, previousTurnDirection);
+        }
         VehicleMovementType type = controller.movementType();
         float turnThreshold = type == VehicleMovementType.TRACK ? 6.0F : 10.0F;
         int turnDirection = turnDirection(diff, turnThreshold, previousTurnDirection);

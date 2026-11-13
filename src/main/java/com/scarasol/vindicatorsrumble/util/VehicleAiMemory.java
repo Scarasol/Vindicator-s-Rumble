@@ -6,65 +6,62 @@ import com.scarasol.vindicatorsrumble.api.vehicle.SeatHandle;
 import com.scarasol.vindicatorsrumble.api.vehicle.VehicleController;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.level.Level;
 
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.WeakHashMap;
 
 public class VehicleAiMemory {
-    private static final Map<UUID, TimedDriveRequest> TACTICAL_DRIVE_REQUESTS = new HashMap<>();
-    private static final Map<UUID, TimedDriveRequest> VEHICLE_TACTICAL_DRIVE_REQUESTS = new HashMap<>();
-    private static final Map<UUID, DriveRequest> NAVIGATION_DRIVE_REQUESTS = new HashMap<>();
-    private static final Map<UUID, TimedCurrentWeaponSnapshot> CURRENT_WEAPONS = new HashMap<>();
-    private static final Map<UUID, TimedCurrentWeaponSnapshot> VEHICLE_CURRENT_WEAPONS = new HashMap<>();
+    private static final Map<Level, Memory> LEVELS = new WeakHashMap<>();
 
     public static void setDriveRequest(Mob mob, DriveRequest request, int ttlTicks) {
-        TACTICAL_DRIVE_REQUESTS.put(mob.getUUID(), new TimedDriveRequest(request, mob.level().getGameTime() + ttlTicks));
+        memory(mob.level()).driveRequests.put(mob.getUUID(), new Timed<>(request, mob.level().getGameTime() + ttlTicks));
     }
 
     public static void setVehicleDriveRequest(Entity vehicle, DriveRequest request, int ttlTicks) {
-        VEHICLE_TACTICAL_DRIVE_REQUESTS.put(vehicle.getUUID(), new TimedDriveRequest(request, vehicle.level().getGameTime() + ttlTicks));
+        memory(vehicle.level()).vehicleDriveRequests.put(vehicle.getUUID(), new Timed<>(request, vehicle.level().getGameTime() + ttlTicks));
     }
 
     public static void setNavigationDriveRequest(Mob mob, DriveRequest request) {
-        NAVIGATION_DRIVE_REQUESTS.put(mob.getUUID(), request);
+        memory(mob.level()).navigationRequests.put(mob.getUUID(), request);
     }
 
     public static void setCurrentWeapon(Mob mob, CurrentWeaponSnapshot snapshot, int ttlTicks) {
-        CURRENT_WEAPONS.put(mob.getUUID(), new TimedCurrentWeaponSnapshot(snapshot, mob.level().getGameTime() + ttlTicks));
+        memory(mob.level()).weapons.put(mob.getUUID(), new Timed<>(snapshot, mob.level().getGameTime() + ttlTicks));
     }
 
     public static void setVehicleCurrentWeapon(Entity vehicle, CurrentWeaponSnapshot snapshot, int ttlTicks) {
-        VEHICLE_CURRENT_WEAPONS.put(vehicle.getUUID(), new TimedCurrentWeaponSnapshot(snapshot, vehicle.level().getGameTime() + ttlTicks));
+        memory(vehicle.level()).vehicleWeapons.put(vehicle.getUUID(), new Timed<>(snapshot, vehicle.level().getGameTime() + ttlTicks));
     }
 
     public static DriveRequest getDriveRequest(Mob mob) {
-        cleanup(mob);
-        TimedDriveRequest request = TACTICAL_DRIVE_REQUESTS.get(mob.getUUID());
-        return request == null ? DriveRequest.NONE : request.request;
+        Memory memory = LEVELS.get(mob.level());
+        return memory == null ? DriveRequest.NONE
+                : live(memory.driveRequests, mob.getUUID(), mob.level()).orElse(DriveRequest.NONE);
     }
 
     public static DriveRequest getVehicleDriveRequest(Mob mob, VehicleController controller) {
-        cleanup(mob);
-        if (controller == null || controller.entity() == null) {
+        Memory memory = LEVELS.get(mob.level());
+        if (memory == null || controller == null || controller.entity() == null
+                || controller.level() != mob.level()) {
             return DriveRequest.NONE;
         }
-        TimedDriveRequest request = VEHICLE_TACTICAL_DRIVE_REQUESTS.get(controller.entity().getUUID());
-        return request == null ? DriveRequest.NONE : request.request;
+        return live(memory.vehicleDriveRequests, controller.entity().getUUID(), mob.level()).orElse(DriveRequest.NONE);
     }
 
     public static DriveRequest getNavigationDriveRequest(Mob mob) {
-        return NAVIGATION_DRIVE_REQUESTS.getOrDefault(mob.getUUID(), DriveRequest.NONE);
+        Memory memory = LEVELS.get(mob.level());
+        return memory == null ? DriveRequest.NONE : memory.navigationRequests.getOrDefault(mob.getUUID(), DriveRequest.NONE);
     }
 
     public static Optional<CurrentWeaponSnapshot> getCurrentWeapon(Mob mob) {
-        cleanup(mob);
-        TimedCurrentWeaponSnapshot snapshot = CURRENT_WEAPONS.get(mob.getUUID());
-        return snapshot == null ? Optional.empty() : Optional.of(snapshot.snapshot);
+        Memory memory = LEVELS.get(mob.level());
+        return memory == null ? Optional.empty() : live(memory.weapons, mob.getUUID(), mob.level());
     }
 
     public static Optional<CurrentWeaponSnapshot> getCurrentWeapon(Mob mob, VehicleController controller, Entity target) {
@@ -77,102 +74,110 @@ public class VehicleAiMemory {
     }
 
     public static Optional<CurrentWeaponSnapshot> getVehicleCurrentWeapon(Mob mob, VehicleController controller, Entity target) {
-        if (controller == null || controller.entity() == null || target == null) {
+        Memory memory = LEVELS.get(mob.level());
+        if (memory == null || controller == null || controller.entity() == null || target == null
+                || controller.level() != mob.level()) {
             return Optional.empty();
         }
-        cleanup(mob);
-        TimedCurrentWeaponSnapshot snapshot = VEHICLE_CURRENT_WEAPONS.get(controller.entity().getUUID());
-        return snapshot == null
-                ? Optional.empty()
-                : Optional.of(snapshot.snapshot)
-                        .filter(value -> value.matchesVehicleTarget(controller.entity().getUUID(), target.getUUID()));
+        return live(memory.vehicleWeapons, controller.entity().getUUID(), mob.level())
+                .filter(value -> value.matchesVehicleTarget(controller.entity().getUUID(), target.getUUID()));
     }
 
     public static List<CurrentWeaponSnapshot> getVehicleCurrentWeapons(Mob mob, VehicleController controller, Entity target) {
-        if (controller == null || controller.entity() == null || target == null) {
+        if (controller == null || controller.entity() == null || target == null
+                || controller.level() != mob.level()) {
             return List.of();
         }
-        cleanup(mob);
         UUID vehicleUuid = controller.entity().getUUID();
         UUID targetUuid = target.getUUID();
         List<CurrentWeaponSnapshot> snapshots = new ArrayList<>();
-        for (TimedCurrentWeaponSnapshot timedSnapshot : CURRENT_WEAPONS.values()) {
-            CurrentWeaponSnapshot snapshot = timedSnapshot.snapshot;
-            if (snapshot.matchesVehicleTarget(vehicleUuid, targetUuid)) {
-                snapshots.add(snapshot);
+        // Passenger membership is the vehicle-local index; never scan other vehicles' snapshots.
+        for (Entity passenger : controller.passengers()) {
+            if (passenger instanceof Mob passengerMob) {
+                getCurrentWeapon(passengerMob)
+                        .filter(snapshot -> snapshot.matchesVehicleTarget(vehicleUuid, targetUuid))
+                        .ifPresent(snapshots::add);
             }
         }
-        TimedCurrentWeaponSnapshot vehicleSnapshot = VEHICLE_CURRENT_WEAPONS.get(vehicleUuid);
-        if (vehicleSnapshot != null && vehicleSnapshot.snapshot.matchesVehicleTarget(vehicleUuid, targetUuid)) {
-            snapshots.add(vehicleSnapshot.snapshot);
-        }
+        getVehicleCurrentWeapon(mob, controller, target).ifPresent(snapshots::add);
         return snapshots;
     }
 
     public static void clearNavigationDriveRequest(Mob mob) {
-        NAVIGATION_DRIVE_REQUESTS.remove(mob.getUUID());
+        Memory memory = LEVELS.get(mob.level());
+        if (memory != null) memory.navigationRequests.remove(mob.getUUID());
     }
 
     public static void clearDriveRequest(Mob mob) {
-        TACTICAL_DRIVE_REQUESTS.remove(mob.getUUID());
+        Memory memory = LEVELS.get(mob.level());
+        if (memory != null) memory.driveRequests.remove(mob.getUUID());
     }
 
     public static void clearCurrentWeapon(Mob mob) {
-        CURRENT_WEAPONS.remove(mob.getUUID());
+        Memory memory = LEVELS.get(mob.level());
+        if (memory != null) memory.weapons.remove(mob.getUUID());
     }
 
     public static void clear(Mob mob) {
-        TACTICAL_DRIVE_REQUESTS.remove(mob.getUUID());
-        NAVIGATION_DRIVE_REQUESTS.remove(mob.getUUID());
-        TimedCurrentWeaponSnapshot currentWeapon = CURRENT_WEAPONS.remove(mob.getUUID());
+        Memory memory = LEVELS.get(mob.level());
+        if (memory == null) return;
+        memory.driveRequests.remove(mob.getUUID());
+        memory.navigationRequests.remove(mob.getUUID());
+        Timed<CurrentWeaponSnapshot> currentWeapon = memory.weapons.remove(mob.getUUID());
         if (currentWeapon != null) {
-            UUID vehicleUuid = currentWeapon.snapshot.vehicleUuid();
-            TimedCurrentWeaponSnapshot vehicleWeapon = VEHICLE_CURRENT_WEAPONS.get(vehicleUuid);
-            if (vehicleWeapon != null && vehicleWeapon.snapshot.seatId() == currentWeapon.snapshot.seatId()) {
-                VEHICLE_CURRENT_WEAPONS.remove(vehicleUuid);
-                VEHICLE_TACTICAL_DRIVE_REQUESTS.remove(vehicleUuid);
+            UUID vehicleUuid = currentWeapon.value.vehicleUuid();
+            Timed<CurrentWeaponSnapshot> vehicleWeapon = memory.vehicleWeapons.get(vehicleUuid);
+            if (vehicleWeapon != null && vehicleWeapon.value.seatId() == currentWeapon.value.seatId()) {
+                memory.vehicleWeapons.remove(vehicleUuid);
+                memory.vehicleDriveRequests.remove(vehicleUuid);
             }
         }
     }
 
     public static void clearVehicle(Entity vehicle) {
+        Memory memory = LEVELS.get(vehicle.level());
+        if (memory == null) return;
         UUID vehicleUuid = vehicle.getUUID();
-        VEHICLE_TACTICAL_DRIVE_REQUESTS.remove(vehicleUuid);
-        VEHICLE_CURRENT_WEAPONS.remove(vehicleUuid);
-        CURRENT_WEAPONS.entrySet().removeIf(entry -> entry.getValue().snapshot.vehicleUuid().equals(vehicleUuid));
+        memory.vehicleDriveRequests.remove(vehicleUuid);
+        memory.vehicleWeapons.remove(vehicleUuid);
+        memory.weapons.values().removeIf(snapshot -> snapshot.value.vehicleUuid().equals(vehicleUuid));
     }
 
-    private static void cleanup(Mob mob) {
-        long now = mob.level().getGameTime();
-        Iterator<Map.Entry<UUID, TimedDriveRequest>> iterator = TACTICAL_DRIVE_REQUESTS.entrySet().iterator();
-        while (iterator.hasNext()) {
-            if (iterator.next().getValue().expiresAt < now) {
-                iterator.remove();
-            }
-        }
-        Iterator<Map.Entry<UUID, TimedDriveRequest>> vehicleRequestIterator = VEHICLE_TACTICAL_DRIVE_REQUESTS.entrySet().iterator();
-        while (vehicleRequestIterator.hasNext()) {
-            if (vehicleRequestIterator.next().getValue().expiresAt < now) {
-                vehicleRequestIterator.remove();
-            }
-        }
-        Iterator<Map.Entry<UUID, TimedCurrentWeaponSnapshot>> weaponIterator = CURRENT_WEAPONS.entrySet().iterator();
-        while (weaponIterator.hasNext()) {
-            if (weaponIterator.next().getValue().expiresAt < now) {
-                weaponIterator.remove();
-            }
-        }
-        Iterator<Map.Entry<UUID, TimedCurrentWeaponSnapshot>> vehicleWeaponIterator = VEHICLE_CURRENT_WEAPONS.entrySet().iterator();
-        while (vehicleWeaponIterator.hasNext()) {
-            if (vehicleWeaponIterator.next().getValue().expiresAt < now) {
-                vehicleWeaponIterator.remove();
-            }
-        }
+    public static void expire(Level level) {
+        Memory memory = LEVELS.get(level);
+        if (memory == null) return;
+        long now = level.getGameTime();
+        memory.driveRequests.values().removeIf(value -> value.expiresAt < now);
+        memory.vehicleDriveRequests.values().removeIf(value -> value.expiresAt < now);
+        memory.weapons.values().removeIf(value -> value.expiresAt < now);
+        memory.vehicleWeapons.values().removeIf(value -> value.expiresAt < now);
     }
 
-    private record TimedDriveRequest(DriveRequest request, long expiresAt) {
+    public static void clearLevel(Level level) {
+        LEVELS.remove(level);
     }
 
-    private record TimedCurrentWeaponSnapshot(CurrentWeaponSnapshot snapshot, long expiresAt) {
+    private static Memory memory(Level level) {
+        return LEVELS.computeIfAbsent(level, key -> new Memory());
+    }
+
+    private static <T> Optional<T> live(Map<UUID, Timed<T>> entries, UUID id, Level level) {
+        Timed<T> value = entries.get(id);
+        if (value != null && value.expiresAt < level.getGameTime()) {
+            entries.remove(id);
+            return Optional.empty();
+        }
+        return value == null ? Optional.empty() : Optional.of(value.value);
+    }
+
+    private record Timed<T>(T value, long expiresAt) {
+    }
+
+    private static final class Memory {
+        final Map<UUID, Timed<DriveRequest>> driveRequests = new HashMap<>();
+        final Map<UUID, Timed<DriveRequest>> vehicleDriveRequests = new HashMap<>();
+        final Map<UUID, DriveRequest> navigationRequests = new HashMap<>();
+        final Map<UUID, Timed<CurrentWeaponSnapshot>> weapons = new HashMap<>();
+        final Map<UUID, Timed<CurrentWeaponSnapshot>> vehicleWeapons = new HashMap<>();
     }
 }

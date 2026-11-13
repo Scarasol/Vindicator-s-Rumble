@@ -6,23 +6,32 @@ import com.scarasol.vindicatorsrumble.api.vehicle.VehicleController;
 import com.scarasol.vindicatorsrumble.api.vehicle.VehicleMovementType;
 import com.scarasol.vindicatorsrumble.compat.VehicleControllers;
 import com.scarasol.vindicatorsrumble.config.CommonConfig;
+import com.scarasol.vindicatorsrumble.init.ModTags;
 import com.scarasol.vindicatorsrumble.util.VehicleAiLogger;
 import com.scarasol.vindicatorsrumble.util.WeightedRandom;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.tags.FluidTags;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.MobSpawnType;
+import net.minecraft.world.entity.monster.PatrollingMonster;
 import net.minecraft.world.entity.raid.Raid;
 import net.minecraft.world.entity.raid.Raider;
+import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.event.entity.EntityJoinLevelEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraftforge.eventbus.api.EventPriority;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.registries.ForgeRegistries;
 
@@ -43,25 +52,38 @@ public class VehicleSpawnEventHandler {
     private static final double SPAWN_RADIUS_RANDOM = 6.0D;
     private static final Set<UUID> SUPPRESSED_VEHICLE_SPAWN = new HashSet<>();
 
-    @SubscribeEvent
+    @SubscribeEvent(priority = EventPriority.LOWEST)
     public static void onEntityJoinLevel(EntityJoinLevelEvent event) {
         if (!(event.getLevel() instanceof ServerLevel level)
                 || event.loadedFromDisk()
                 || !CommonConfig.ENABLE_VEHICLE_AI.get()
-                || !(event.getEntity() instanceof LivingEntity entity)) {
+                || !(event.getEntity() instanceof Mob entity)
+                || entity.isPassenger()) {
             return;
         }
         if (SUPPRESSED_VEHICLE_SPAWN.remove(entity.getUUID())) {
             return;
         }
 
-        if (isEligibleRaidVindicator(entity)) {
-            trySpawnConfiguredVehicle(level, entity, CommonConfig.VINDICATOR_RAID_VEHICLE_CHANCE.get(), CommonConfig.VINDICATOR_RAID_VEHICLE_TYPES.get());
+        if (entity instanceof Raider raider && raider.getCurrentRaid() != null) {
+            if (isEligibleRaidVindicator(entity)) {
+                trySpawnConfiguredVehicle(level, entity, CommonConfig.VINDICATOR_RAID_VEHICLE_CHANCE.get(), CommonConfig.VINDICATOR_RAID_VEHICLE_TYPES.get());
+            }
+            return;
+        }
+
+        if (entity instanceof PatrollingMonster && entity.getSpawnType() == MobSpawnType.PATROL) {
+            trySpawnConfiguredVehicle(level, entity, CommonConfig.PATROL_VEHICLE_CHANCE.get(), CommonConfig.VINDICATOR_RAID_VEHICLE_TYPES.get());
             return;
         }
 
         if (isVillageDefender(entity) && level.isCloseToVillage(entity.blockPosition(), VILLAGE_SEARCH_SECTIONS)) {
             trySpawnConfiguredVehicle(level, entity, CommonConfig.VILLAGE_DEFENDER_VEHICLE_CHANCE.get(), CommonConfig.VILLAGE_DEFENDER_VEHICLE_TYPES.get());
+            return;
+        }
+
+        if (entity.getType().is(ModTags.EntityTypes.VEHICLE_AI_USERS)) {
+            trySpawnConfiguredVehicle(level, entity, CommonConfig.NATURAL_VEHICLE_CHANCE.get(), CommonConfig.VINDICATOR_RAID_VEHICLE_TYPES.get());
         }
     }
 
@@ -138,19 +160,53 @@ public class VehicleSpawnEventHandler {
             VehicleAiLogger.debug(owner, "Vehicle spawn skipped: failed to create {}", ForgeRegistries.ENTITY_TYPES.getKey(vehicleType));
             return;
         }
-        boolean airborneHover = VehicleControllers.create(vehicle)
-                .map(controller -> controller.movementType() == VehicleMovementType.HELICOPTER && controller.supportsFlightControl())
-                .orElse(false);
+        Optional<VehicleController> optionalController = VehicleControllers.create(vehicle);
+        if (optionalController.isEmpty() || !optionalController.get().isControllable()) {
+            return;
+        }
+        VehicleController controller = optionalController.get();
+        boolean flying = controller.supportsFlightControl()
+                || controller.movementType() == VehicleMovementType.HELICOPTER
+                || controller.movementType() == VehicleMovementType.AIRCRAFT;
+        boolean airborneHover = controller.movementType() == VehicleMovementType.HELICOPTER && controller.supportsFlightControl();
+        if (flying && (level.dimensionType().hasCeiling() || !isOpenSky(level, owner.blockPosition()))) {
+            VehicleAiLogger.debug(owner, "Vehicle spawn skipped: aircraft requires an open-sky owner position");
+            return;
+        }
 
         for (int attempt = 0; attempt < SPAWN_ATTEMPTS; attempt++) {
             Vec3 position = randomSpawnPosition(level, owner.blockPosition(), level.random, vehicle, airborneHover);
+            if (position == null) {
+                continue;
+            }
             vehicle.moveTo(position.x, position.y, position.z, level.random.nextFloat() * 360.0F, 0.0F);
-            if (level.noCollision(vehicle)) {
-                level.addFreshEntity(vehicle);
+            double radius = controller.horizontalFootprintRadius();
+            AABB clearance = vehicle.getBoundingBox().minmax(new AABB(
+                    position.x - radius, vehicle.getBoundingBox().minY, position.z - radius,
+                    position.x + radius, vehicle.getBoundingBox().maxY, position.z + radius));
+            if (clearance.minY < level.getMinBuildHeight() || clearance.maxY >= level.getMaxBuildHeight()
+                    || !level.getWorldBorder().isWithinBounds(clearance)
+                    || !level.hasChunksAt(BlockPos.containing(clearance.minX, clearance.minY, clearance.minZ),
+                    BlockPos.containing(clearance.maxX, clearance.maxY, clearance.maxZ))
+                    || !level.noCollision(vehicle, clearance)
+                    || (controller.movementType() != VehicleMovementType.SHIP && level.containsAnyLiquid(clearance))
+                    || (flying && !hasOpenSky(level, clearance, owner.getY()))
+                    || (!flying && !hasGroundSupport(level, clearance, controller.movementType() == VehicleMovementType.SHIP))) {
+                continue;
+            }
+            boolean added;
+            SUPPRESSED_VEHICLE_SPAWN.add(vehicle.getUUID());
+            try {
+                added = level.addFreshEntity(vehicle);
+            } finally {
+                SUPPRESSED_VEHICLE_SPAWN.remove(vehicle.getUUID());
+            }
+            if (added) {
                 VehicleAiLogger.debug(owner, "Spawned vehicle {} near generated mob airborneHover={}", ForgeRegistries.ENTITY_TYPES.getKey(vehicleType), airborneHover);
                 boardGeneratedVehicle(level, owner, vehicle);
                 return;
             }
+            return;
         }
 
         VehicleAiLogger.debug(owner, "Vehicle spawn skipped: no collision-free nearby position for {}", ForgeRegistries.ENTITY_TYPES.getKey(vehicleType));
@@ -263,7 +319,18 @@ public class VehicleSpawnEventHandler {
         double distance = MIN_SPAWN_RADIUS + random.nextDouble() * SPAWN_RADIUS_RANDOM;
         int x = origin.getX() + (int) Math.round(Math.cos(angle) * distance);
         int z = origin.getZ() + (int) Math.round(Math.sin(angle) * distance);
-        int y = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
+        if (!level.hasChunkAt(new BlockPos(x, origin.getY(), z))) {
+            return null;
+        }
+        // Search the owner's local floor, not the surface above an indoor or underground spawn.
+        BlockHitResult floor = level.clip(new ClipContext(
+                new Vec3(x + 0.5D, origin.getY() + 1.0D, z + 0.5D),
+                new Vec3(x + 0.5D, origin.getY() - 4.0D, z + 0.5D),
+                ClipContext.Block.COLLIDER, ClipContext.Fluid.ANY, vehicle));
+        if (floor.getType() != HitResult.Type.BLOCK || floor.getDirection() != Direction.UP) {
+            return null;
+        }
+        double y = floor.getLocation().y + 0.05D;
         if (airborneHover) {
             double maxY = level.getMaxBuildHeight() - Math.max(vehicle.getBbHeight(), 2.0F) - 1.0D;
             double spawnY = Math.max(level.getMinBuildHeight() + 1.0D,
@@ -271,6 +338,37 @@ public class VehicleSpawnEventHandler {
             return new Vec3(x + 0.5D, spawnY, z + 0.5D);
         }
         return new Vec3(x + 0.5D, y, z + 0.5D);
+    }
+
+    private static boolean hasOpenSky(ServerLevel level, AABB clearance, double ownerY) {
+        for (BlockPos column : BlockPos.betweenClosed(
+                BlockPos.containing(clearance.minX, ownerY, clearance.minZ),
+                BlockPos.containing(clearance.maxX, ownerY, clearance.maxZ))) {
+            if (!isOpenSky(level, column)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean isOpenSky(ServerLevel level, BlockPos position) {
+        return level.canSeeSky(position)
+                && level.getHeight(Heightmap.Types.MOTION_BLOCKING, position.getX(), position.getZ()) <= position.getY();
+    }
+
+    private static boolean hasGroundSupport(ServerLevel level, AABB clearance, boolean allowWater) {
+        for (double x : new double[]{clearance.minX + 0.1D, clearance.maxX - 0.1D}) {
+            for (double z : new double[]{clearance.minZ + 0.1D, clearance.maxZ - 0.1D}) {
+                BlockPos floor = BlockPos.containing(x, clearance.minY - 0.1D, z);
+                AABB support = new AABB(x - 0.05D, floor.getY(), z - 0.05D,
+                        x + 0.05D, clearance.minY, z + 0.05D);
+                if (!level.getBlockCollisions(null, support).iterator().hasNext()
+                        && !(allowWater && level.getFluidState(floor).is(FluidTags.WATER))) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     private VehicleSpawnEventHandler() {

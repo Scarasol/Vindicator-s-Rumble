@@ -19,6 +19,7 @@ import com.scarasol.vindicatorsrumble.util.VehicleAiMemory;
 import com.scarasol.vindicatorsrumble.util.VehicleAiTuning;
 import com.scarasol.vindicatorsrumble.util.VehicleClaimManager;
 import com.scarasol.vindicatorsrumble.util.VehicleTargetRangeManager;
+import com.scarasol.vindicatorsrumble.util.VehicleSmokeDefense;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffects;
@@ -86,6 +87,7 @@ public class VehicleAiEventHandler {
             clearMobVehicleState(mob);
         }
         if (VehicleControllers.create(entity).isPresent()) {
+            VehicleSmokeDefense.clear(entity);
             VehicleAiMemory.clearVehicle(entity);
             VehicleClaimManager.releaseVehicle(entity);
         }
@@ -110,7 +112,10 @@ public class VehicleAiEventHandler {
     public static void onLevelUnload(LevelEvent.Unload event) {
         if (event.getLevel() instanceof ServerLevel level) {
             VehicleThreats.clearLevel(level);
+            VehicleSmokeDefense.clearLevel(level);
             if (ModCompat.isRecruitsLoaded()) RecruitsCompat.clearLevel(level);
+            VehicleAiMemory.clearLevel(level);
+            VehicleClaimManager.clearLevel(level);
         }
     }
 
@@ -119,6 +124,8 @@ public class VehicleAiEventHandler {
         if (event.phase == TickEvent.Phase.END && event.level instanceof ServerLevel level
                 && level.getGameTime() % 20L == 0L) {
             VehicleThreats.expire(level);
+            VehicleAiMemory.expire(level);
+            VehicleClaimManager.expire(level);
         }
     }
 
@@ -176,6 +183,9 @@ public class VehicleAiEventHandler {
         }
 
         if (event.isDismounting()) {
+            VehicleControllers.create(event.getEntityBeingMounted())
+                    .filter(controller -> controller.canDrive(mob))
+                    .ifPresent(controller -> VehicleSmokeDefense.clearDriver(controller.entity()));
             if (ModCompat.isRecruitsLoaded()) {
                 RecruitsCompat.release(mob);
             }
@@ -220,13 +230,15 @@ public class VehicleAiEventHandler {
             return;
         }
 
+        var current = VehicleControllers.forMob(mob);
+        current.filter(controller -> controller.canDrive(mob))
+                .ifPresent(controller -> VehicleSmokeDefense.observe(mob, controller));
+
         LivingEntity target = mob.getTarget();
         boolean validTarget = VehicleAiTuning.isValidCombatTarget(mob, target);
-        boolean validVehicleCombatTarget = VehicleAiTuning.isValidVehicleCombatTarget(mob, target);
-        boolean retainedDriveTarget = VehicleAiTuning.isValidVehicleDriveTarget(mob, target);
-        if (mob.tickCount % 20 == 0) {
+        if (VehicleAiLogger.shouldLog(mob, 20)) {
             LivingEntity debugTarget = target;
-            VehicleControllers.forMob(mob).ifPresent(controller -> VehicleAiLogger.debug(mob,
+            current.ifPresent(controller -> VehicleAiLogger.debug(mob,
                     "Vehicle passenger tick vehicle={} seat={} target={} followRange={} canAcquire={} validTarget={} validVehicleCombatTarget={} retainedDriveTarget={} distanceSqr={}",
                     controller.entity().getId(),
                     controller.seatOf(mob).map(SeatHandle::id).orElse(-1),
@@ -234,16 +246,13 @@ public class VehicleAiEventHandler {
                     VehicleAiTuning.followRange(mob),
                     VehicleAiTuning.canAcquireTargets(mob),
                     validTarget,
-                    validVehicleCombatTarget,
-                    retainedDriveTarget,
+                    validTarget,
+                    validTarget,
                     debugTarget == null ? -1.0D : mob.distanceToSqr(debugTarget)));
         }
 
-        if (validTarget || retainedDriveTarget) {
+        if (validTarget) {
             applyDebugTargetGlow(mob);
-            if (!validVehicleCombatTarget && (target != null || mob.tickCount % 20 == 0)) {
-                VehicleControllers.forMob(mob).ifPresent(controller -> controller.stopWeaponControl(mob));
-            }
             return;
         }
 
@@ -260,7 +269,7 @@ public class VehicleAiEventHandler {
         }
 
         if (target != null || mob.tickCount % 20 == 0) {
-            VehicleControllers.forMob(mob).ifPresent(controller -> controller.stopWeaponControl(mob));
+            current.ifPresent(controller -> controller.stopWeaponControl(mob));
         }
     }
 

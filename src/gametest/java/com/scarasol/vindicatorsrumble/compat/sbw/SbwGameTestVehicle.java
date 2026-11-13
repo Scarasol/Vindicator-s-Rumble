@@ -4,12 +4,20 @@ import com.atsuishio.superbwarfare.entity.vehicle.base.VehicleEntity;
 import com.atsuishio.superbwarfare.data.gun.GunProp;
 import com.atsuishio.superbwarfare.entity.projectile.IglaMissileEntity;
 import com.atsuishio.superbwarfare.entity.projectile.MissileProjectile;
+import com.atsuishio.superbwarfare.entity.projectile.WireGuideMissileEntity;
+import com.atsuishio.superbwarfare.entity.projectile.SmokeDecoyEntity;
+import com.atsuishio.superbwarfare.init.ModEntities;
+import com.atsuishio.superbwarfare.init.ModDamageTypes;
+import com.atsuishio.superbwarfare.init.ModItems;
+import net.minecraft.world.entity.LivingEntity;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.item.ItemStack;
+import net.minecraftforge.registries.ForgeRegistries;
 
 import java.util.List;
 
@@ -87,10 +95,111 @@ public final class SbwGameTestVehicle {
         return ((VehicleEntity) entity).getDecoyCount();
     }
 
+    public static boolean hasDecoyInput(Entity entity) {
+        return ((VehicleEntity) entity).decoyInputDown();
+    }
+
+    public static void prepareSmokeFixture(Entity entity, int loaded, int spare) {
+        VehicleEntity vehicle = (VehicleEntity) entity;
+        for (int slot = 0; slot < vehicle.getContainerSize(); slot++) {
+            vehicle.setItem(slot, ItemStack.EMPTY);
+        }
+        JsonObject properties = new JsonObject();
+        properties.addProperty("MaxHealth", 1000.0F);
+        properties.addProperty("HasDecoy", true);
+        properties.addProperty("SmokeDecoy", true);
+        properties.addProperty("DecoyReloadTime", 60);
+        properties.addProperty("ApplyDefaultDamageModifiers", false);
+        properties.addProperty("RepairAmount", 0);
+        properties.add("DamageModifiers", new com.google.gson.JsonArray());
+        vehicle.setOverride(properties.toString());
+        vehicle.setHealth(vehicle.getMaxHealth());
+        vehicle.setDecoyCount(loaded);
+        vehicle.setDecoyReloadCoolDown(0);
+        vehicle.setEnergy(vehicle.getMaxEnergy());
+        if (spare > 0) {
+            vehicle.setItem(0, new ItemStack(ModItems.VEHICLE_SMOKE_AMMO.get(), spare));
+        }
+        for (String weapon : List.copyOf(vehicle.getGunDataMap().keySet())) {
+            vehicle.modifyGunData(weapon, data -> {
+                data.ammo.set(0);
+                data.virtualAmmo.set(0);
+                data.backupAmmoCount.set(0);
+            });
+        }
+    }
+
+    public static boolean isSmoke(Entity entity) {
+        return entity instanceof SmokeDecoyEntity;
+    }
+
+    public static void loseMissileGuidance(Entity missile) {
+        ((MissileProjectile) missile).setLost(true);
+    }
+
+    public static boolean missileTargets(Entity missile, Entity target) {
+        return ((MissileProjectile) missile).getTargetUUID().equals(target.getStringUUID());
+    }
+
+    public static int spareSmoke(Entity entity) {
+        VehicleEntity vehicle = (VehicleEntity) entity;
+        int count = 0;
+        for (int slot = 0; slot < vehicle.getContainerSize(); slot++) {
+            ItemStack stack = vehicle.getItem(slot);
+            if (stack.is(ModItems.VEHICLE_SMOKE_AMMO.get())) count += stack.getCount();
+        }
+        return count;
+    }
+
+    public static float vehicleHealth(Entity entity) {
+        return ((VehicleEntity) entity).getHealth();
+    }
+
+    public static void setVehicleHealth(Entity entity, float health) {
+        ((VehicleEntity) entity).setHealth(health);
+    }
+
+    public static void enemyHit(Entity entity, LivingEntity attacker, float amount) {
+        entity.hurt(entity.level().damageSources().mobAttack(attacker), amount);
+    }
+
+    public static void collisionHit(Entity entity, LivingEntity attacker, float amount) {
+        entity.hurt(ModDamageTypes.causeVehicleStrikeDamage(entity.level().registryAccess(), attacker, attacker), amount);
+    }
+
+    public static void softenMobDamage(Entity entity) {
+        VehicleEntity vehicle = (VehicleEntity) entity;
+        JsonObject properties = JsonParser.parseString(vehicle.getOverride()).getAsJsonObject();
+        properties.add("DamageModifiers", JsonParser.parseString(
+                "[{\"Type\":\"Multiply\",\"Source\":\"minecraft:mob_attack\",\"Value\":0.1}]"));
+        vehicle.setOverride(properties.toString());
+    }
+
+    public static Entity wireGuidedMissile(ServerLevel level, Entity owner, Entity target, Vec3 position) {
+        WireGuideMissileEntity missile = new WireGuideMissileEntity(ModEntities.WIRE_GUIDE_MISSILE.get(), level);
+        missile.setOwner(owner);
+        missile.setTargetUUID(target.getStringUUID());
+        missile.setPos(position);
+        level.addFreshEntity(missile);
+        return missile;
+    }
+
     public static Entity trackedMissile(ServerLevel level, Entity owner, Entity target, Vec3 position) {
         IglaMissileEntity missile = new IglaMissileEntity(owner, level, 0.0F, 0.0F, 0.0F);
         missile.setPos(position);
         missile.setTargetUUID(target.getStringUUID());
+        level.addFreshEntity(missile);
+        return missile;
+    }
+
+    public static Entity missileWithGuidance(ServerLevel level, Entity owner, Entity target, Vec3 position,
+                                            ResourceLocation type, int guidance) {
+        MissileProjectile missile = (MissileProjectile) ForgeRegistries.ENTITY_TYPES.getValue(type).create(level);
+        missile.setOwner(owner);
+        missile.setGuideType(guidance);
+        missile.setTargetUUID(target.getStringUUID());
+        missile.setTargetPos(target.position());
+        missile.setPos(position);
         level.addFreshEntity(missile);
         return missile;
     }

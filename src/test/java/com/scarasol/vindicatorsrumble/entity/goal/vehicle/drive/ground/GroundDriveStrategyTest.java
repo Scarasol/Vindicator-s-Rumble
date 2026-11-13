@@ -123,12 +123,12 @@ class GroundDriveStrategyTest {
     }
 
     @Test
-    void turningWithinTheSameNavigationFootprintKeepsTheRoute() {
+    void widerBodyWithTheSameDiagonalReplansForRoadClearance() {
         var previous = key(DriveIntent.MOVE_TO, -1, Vec3.ZERO, 0);
         var next = new GroundDriveStrategy.PathPlanKey(DriveIntent.MOVE_TO, -1, BlockPos.ZERO,
                 Vec3.ZERO, new VehicleDimensions(4.0D, 2.0D, 4.0D), 0);
 
-        assertFalse(GroundDriveStrategy.shouldReplanPath(previous, next, 19, true));
+        assertTrue(GroundDriveStrategy.shouldReplanPath(previous, next, 19, true));
     }
 
     @Test

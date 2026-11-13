@@ -26,6 +26,8 @@ import net.minecraft.world.level.pathfinder.Path;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
 
 public final class GroundDriveStrategy implements DriveStrategy {
@@ -34,6 +36,7 @@ public final class GroundDriveStrategy implements DriveStrategy {
     private static final double RAM_WINDUP_RELEASE_DISTANCE_SQR = 121.0D;
     private static final double RAM_FRONT_ARC_DEGREES = 12.0D;
     private static final double MANEUVER_BLOCKED_DISTANCE = 1.35D;
+    private static final double MANEUVER_CONTACT_DISTANCE = 0.15D;
     private static final double MANEUVER_SIDE_SQUEEZE_DISTANCE = 1.45D;
     private static final double MANEUVER_EXIT_CLEARANCE = 2.25D;
     private static final double MANEUVER_PROGRESS_DISTANCE_SQR = 0.01D;
@@ -43,15 +46,17 @@ public final class GroundDriveStrategy implements DriveStrategy {
     private static final double CHASE_BAND_SPEED_BRAKE_LEAD_SCALE = 16.0D;
     private static final double CHASE_BAND_MAX_BRAKE_LEAD_RATIO = 0.45D;
     private static final int MANEUVER_PROBE_INTERVAL = 5;
-    private static final int MANEUVER_MAX_TICKS = 80;
     private static final int MANEUVER_STEP_MIN_TICKS = 4;
     private static final int FIRE_WINDOW_HOLD_TICKS = 20;
 
     private final Mob mob;
     private final DriveVehicleGoal.Mode mode;
+    private final Map<PathSegment, Boolean> pathClearance = new HashMap<>();
     private VehicleController controller;
     private State state = State.IDLE;
     private Path path;
+    private boolean narrowPath;
+    private boolean narrowPathAttempted;
     private PathPlanKey lastPathPlanKey;
     private int replanTicks;
     private int stuckTicks;
@@ -67,10 +72,14 @@ public final class GroundDriveStrategy implements DriveStrategy {
     private boolean retreatingFromTarget;
     private boolean closingToTarget;
     private boolean brakingChaseBand;
+    private boolean maneuverMultiPointTurn;
     private GroundManeuverStep maneuverStep = GroundManeuverStep.BRAKE;
     private GroundClearance maneuverClearance = GroundClearance.open(GroundObstacleRadar.RANGE);
     private Vec3 lastPosition = Vec3.ZERO;
+    private Vec3 reverseTurnWaypoint;
     private Vec3 maneuverLastPosition = Vec3.ZERO;
+    private Vec3 maneuverReverseStart;
+    private Vec3 maneuverReverseForward = Vec3.ZERO;
     private float maneuverLastYaw;
 
     public GroundDriveStrategy(Mob mob, DriveVehicleGoal.Mode mode) {
@@ -128,6 +137,7 @@ public final class GroundDriveStrategy implements DriveStrategy {
     @Override
     public void stop(VehicleController controller) {
         this.controller = controller;
+        this.pathClearance.clear();
         this.path = null;
         this.lastPathPlanKey = null;
         this.state = State.IDLE;
@@ -145,6 +155,7 @@ public final class GroundDriveStrategy implements DriveStrategy {
     @Override
     public void tick(VehicleController controller) {
         this.controller = controller;
+        this.pathClearance.clear();
         if (controller.isWreck() && this.state != State.RECOVER) {
             VehicleAiLogger.debug(this.mob, "Drive goal entering recover because vehicle {} is wrecked", controller.entity().getId());
             this.state = State.RECOVER;
@@ -157,12 +168,14 @@ public final class GroundDriveStrategy implements DriveStrategy {
         }
 
         DriveRequest request = this.effectiveDriveRequest(this.currentDriveRequest());
-        VehicleAiLogger.debugEvery(this.mob, 40, "{} drive request intent={} desiredDistance={} targetEntity={} pathNodes={}",
-                this.mode,
-                request.intent(),
-                request.desiredDistance(),
-                request.targetEntity().map(Entity::getId).orElse(-1),
-                this.path == null ? 0 : this.path.getNodeCount());
+        if (VehicleAiLogger.shouldLog(this.mob, 40)) {
+            VehicleAiLogger.debugEvery(this.mob, 40, "{} drive request intent={} desiredDistance={} targetEntity={} pathNodes={}",
+                    this.mode,
+                    request.intent(),
+                    request.desiredDistance(),
+                    request.targetEntity().map(Entity::getId).orElse(-1),
+                    this.path == null ? 0 : this.path.getNodeCount());
+        }
         if (this.mode == DriveVehicleGoal.Mode.NAVIGATION && this.navigationTargetPosition(request).isEmpty()) {
             VehicleAiLogger.debugEvery(this.mob, 40, "Drive stopping: navigation request has no valid target");
             controller.stopDriving(this.mob);
@@ -196,8 +209,10 @@ public final class GroundDriveStrategy implements DriveStrategy {
             this.state = State.IDLE;
             this.stuckTicks = 0;
             this.turnDirection = 0;
-            VehicleAiLogger.debugEvery(this.mob, 20, "Navigation arrival braking radius={} input={} velocity={}",
-                    VehicleAiTuning.navigationArrivalDistance(controller, request.desiredDistance()), brakeInput, controller.velocity());
+            if (VehicleAiLogger.shouldLog(this.mob, 20)) {
+                VehicleAiLogger.debugEvery(this.mob, 20, "Navigation arrival braking radius={} input={} velocity={}",
+                        VehicleAiTuning.navigationArrivalDistance(controller, request.desiredDistance()), brakeInput, controller.velocity());
+            }
             if (brakeInput.equals(VehicleInput.NONE)) {
                 VehicleAiMemory.clearNavigationDriveRequest(this.mob);
             }
@@ -228,7 +243,8 @@ public final class GroundDriveStrategy implements DriveStrategy {
             if (target.isAlive() && this.hasRequiredLineOfSight(request, target)) {
                 VehicleInput aimInput = GroundSteering.brakeToward(controller, target.position(), true);
                 if (!aimInput.equals(VehicleInput.NONE)) {
-                    VehicleAiLogger.debugEvery(this.mob, 10,
+                    if (VehicleAiLogger.shouldLog(this.mob, 10)) {
+                        VehicleAiLogger.debug(this.mob,
                             "Drive stable fire aiming target={} distance={} horizontalDistance={} yawDiff={} tolerance={} input={} velocity={} weapon={}",
                             target.getId(),
                             Math.sqrt(this.controller.position().distanceToSqr(target.position())),
@@ -238,15 +254,18 @@ public final class GroundDriveStrategy implements DriveStrategy {
                             aimInput,
                             controller.velocity(),
                             this.currentUsableFixedWeapon(target).map(GroundDriveStrategy::weaponSummary).orElse("none"));
+                    }
                     controller.drive(this.mob, aimInput);
                 } else {
-                    VehicleAiLogger.debugEvery(this.mob, 20,
+                    if (VehicleAiLogger.shouldLog(this.mob, 20)) {
+                        VehicleAiLogger.debug(this.mob,
                             "Drive stable fire holding aim on target {} distance={} horizontalDistance={} yawDiff={} weapon={}",
                             target.getId(),
                             Math.sqrt(this.controller.position().distanceToSqr(target.position())),
                             Math.sqrt(this.horizontalDistanceSqr(this.controller.position(), target.position())),
                             Math.abs(this.yawDiffTo(target.position())),
                             this.currentUsableFixedWeapon(target).map(GroundDriveStrategy::weaponSummary).orElse("none"));
+                    }
                     controller.stopDriving(this.mob);
                 }
                 this.path = null;
@@ -286,12 +305,18 @@ public final class GroundDriveStrategy implements DriveStrategy {
             return;
         }
 
+        boolean directRamTarget = request.intent() == DriveIntent.RAM_TARGET
+                && request.targetEntity().filter(Entity::isAlive).filter(this::shouldUseDirectRam).isPresent();
         if (this.replanTicks > 0) {
             this.replanTicks--;
         }
         if (this.shouldReplanPath(request)) {
-            this.state = State.PLAN_PATH;
-            this.planPath(request);
+            if (!directRamTarget || this.state == State.PLAN_PATH) {
+                this.state = State.PLAN_PATH;
+                this.planPath(request);
+            } else {
+                this.replanTicks = CommonConfig.VEHICLE_PATH_REPLAN_INTERVAL.get();
+            }
         } else if (this.replanTicks <= 0) {
             this.replanTicks = CommonConfig.VEHICLE_PATH_REPLAN_INTERVAL.get();
             VehicleAiLogger.debugEvery(this.mob, 40,
@@ -302,14 +327,14 @@ public final class GroundDriveStrategy implements DriveStrategy {
                     this.lastPathPlanKey,
                     this.replanTicks);
         }
-        if (this.shouldRecoverFromBlockedPath(request)) {
+        if (this.shouldRecoverFromBlockedPath(request, directRamTarget)) {
             this.beginManeuver(request, "path unavailable");
             this.tickManeuver(request);
             return;
         }
 
         this.state = State.FOLLOW_PATH;
-        Vec3 waypoint = this.nextWaypoint(request);
+        Vec3 waypoint = this.nextWaypoint(request, directRamTarget);
         if (this.state == State.MANEUVER) {
             this.tickManeuver(request);
             return;
@@ -322,22 +347,37 @@ public final class GroundDriveStrategy implements DriveStrategy {
         double remainingDistanceSqr = this.horizontalDistanceSqr(controller.position(),
                 request.intent() == DriveIntent.MOVE_TO
                         ? this.navigationTargetPosition(request).orElse(waypoint) : waypoint);
-        GroundSteering.SteeringResult steering = request.intent() == DriveIntent.RAM_TARGET
+        if (this.reverseTurnWaypoint != null
+                && this.horizontalDistanceSqr(controller.position(), this.reverseTurnWaypoint) <= 1.0D) {
+            this.reverseTurnWaypoint = null;
+        }
+        boolean directRam = this.reverseTurnWaypoint == null && request.intent() == DriveIntent.RAM_TARGET
+                && request.targetEntity().map(Entity::position).filter(waypoint::equals).isPresent();
+        Vec3 steeringWaypoint = this.reverseTurnWaypoint == null ? waypoint : this.reverseTurnWaypoint;
+        boolean stopAtWaypoint = this.reverseTurnWaypoint == null && this.shouldStopAtWaypoint(request, waypoint);
+        GroundSteering.SteeringResult steering = directRam
                 ? GroundSteering.steerRamToward(controller, waypoint, this.turnDirection)
-                : GroundSteering.steerToward(controller, waypoint, remainingDistanceSqr, request.preferStableFire(), this.turnDirection);
+                : GroundSteering.steerToward(controller, steeringWaypoint, remainingDistanceSqr, stopAtWaypoint,
+                        request.preferStableFire(), this.turnDirection, this.reverseTurnWaypoint != null);
         VehicleInput input = steering.input();
         this.turnDirection = steering.turnDirection();
+        if (!directRam && input.back() && this.reverseTurnWaypoint == null && Math.abs(this.yawDiffTo(waypoint)) < 155.0D) {
+            this.reverseTurnWaypoint = waypoint;
+        } else if (this.reverseTurnWaypoint != null && input.forward() && this.longitudinalSpeed() > 0.05D) {
+            this.reverseTurnWaypoint = null;
+        }
         if (input.back()) {
             this.refreshManeuverClearance(this.lastRadarTick == 0);
+            // Radar clearance starts at the rear face, so body length is already excluded.
             double clearance = Math.max(MANEUVER_EXIT_CLEARANCE,
-                    controller.pathingDimensions().conservativeHorizontalSize() * 0.5D + controller.estimatedHorizontalStoppingDistance());
+                    0.5D + controller.estimatedHorizontalStoppingDistance());
             if (isRetreatInputBlocked(input, this.maneuverClearance, clearance)) {
                 this.beginManeuver(request, "turning reverse blocked");
                 this.tickManeuver(request);
                 return;
             }
         }
-        VehicleAiLogger.debugEvery(this.mob, 20, "Drive following waypoint {} with input {}", waypoint, input);
+        VehicleAiLogger.debugEvery(this.mob, 20, "Drive following waypoint {} with input {}", steeringWaypoint, input);
         controller.drive(this.mob, input);
     }
 
@@ -570,12 +610,26 @@ public final class GroundDriveStrategy implements DriveStrategy {
         double yawDiff = Math.abs(this.yawDiffTo(target.position()));
         if (this.ramWindupTicks > 0) {
             boolean shouldContinue = shouldContinueRamWindup(distanceSqr, yawDiff);
-            if (!shouldContinue) {
+            if (!shouldContinue || !this.hasRamRunupSpace(target.position())) {
                 this.ramWindupTicks = 0;
+                return false;
             }
             return shouldContinue;
         }
-        return shouldStartRamWindup(distanceSqr, yawDiff);
+        return shouldStartRamWindup(distanceSqr, yawDiff) && this.hasRamRunupSpace(target.position());
+    }
+
+    private boolean hasRamRunupSpace(Vec3 target) {
+        this.refreshManeuverClearance(false);
+        VehicleInput input = GroundSteering.ramWindupAway(this.controller, target, this.turnDirection).input();
+        Vec3 away = this.forwardDirection().scale(input.back() ? -1.0D : 1.0D);
+        Vec3 offset = this.controller.position().subtract(target);
+        double along = offset.dot(away);
+        double distance = Math.max(0.0D, -along + Math.sqrt(Math.max(0.0D,
+                along * along + RAM_WINDUP_RELEASE_DISTANCE_SQR - offset.horizontalDistanceSqr())));
+        double required = Math.min(GroundObstacleRadar.RANGE,
+                Math.max(MANEUVER_EXIT_CLEARANCE, distance + this.controller.estimatedHorizontalStoppingDistance()));
+        return !isRetreatInputBlocked(input, this.maneuverClearance, required);
     }
 
     public static boolean shouldStartRamWindup(double distanceSqr, double yawDiffDegrees) {
@@ -593,19 +647,28 @@ public final class GroundDriveStrategy implements DriveStrategy {
     }
 
     private void tickRamWindup(Entity target) {
-        this.ramWindupTicks++;
         GroundSteering.SteeringResult steering = GroundSteering.ramWindupAway(this.controller, target.position(), this.turnDirection);
         VehicleInput input = steering.input();
+        this.refreshManeuverClearance(false);
+        if (isRetreatInputBlocked(input, this.maneuverClearance,
+                Math.max(MANEUVER_EXIT_CLEARANCE, 0.5D + this.controller.estimatedHorizontalStoppingDistance()))) {
+            this.beginManeuver(DriveRequest.ram(target), "ram run-up blocked");
+            this.tickManeuver(DriveRequest.ram(target));
+            return;
+        }
+        this.ramWindupTicks++;
         this.turnDirection = steering.turnDirection();
         this.path = null;
-        VehicleAiLogger.debugEvery(this.mob, 10,
-                "Ram windup target={} ticks={} distanceSqr={} yawDiff={} input={} velocity={}",
-                target.getId(),
-                this.ramWindupTicks,
-                this.horizontalDistanceSqr(this.controller.position(), target.position()),
-                Math.abs(this.yawDiffTo(target.position())),
-                input,
-                this.controller.velocity());
+        if (VehicleAiLogger.shouldLog(this.mob, 20)) {
+            VehicleAiLogger.debugEvery(this.mob, 20,
+                    "Ram windup target={} ticks={} distanceSqr={} yawDiff={} input={} velocity={}",
+                    target.getId(),
+                    this.ramWindupTicks,
+                    this.horizontalDistanceSqr(this.controller.position(), target.position()),
+                    Math.abs(this.yawDiffTo(target.position())),
+                    input,
+                    this.controller.velocity());
+        }
         this.controller.drive(this.mob, input);
     }
 
@@ -637,7 +700,8 @@ public final class GroundDriveStrategy implements DriveStrategy {
                 && (!stableFireRequest || pressureRam);
         boolean hasValidDriveTarget = this.hasValidDriveTarget(request, target);
         DriveIntent intent = combatDriveIntent(requestedIntent, hasValidDriveTarget, canUseRamming);
-        VehicleAiLogger.debugEvery(this.mob, 20,
+        if (VehicleAiLogger.shouldLog(this.mob, 20)) {
+            VehicleAiLogger.debug(this.mob,
                 "Drive combat selection memoryIntent={} requestedIntent={} resultIntent={} stableFireRequest={} hasValidTarget={} canUseRamming={} pressureRam={} retreatBlockedRam={} retreatBlockedRamTicks={} target={} memoryWeapon={} vehicleWeapon={}",
                 request.intent(),
                 requestedIntent,
@@ -655,6 +719,7 @@ public final class GroundDriveStrategy implements DriveStrategy {
                 request.targetEntity().flatMap(value -> VehicleAiMemory.getVehicleCurrentWeapon(this.mob, this.controller, value))
                         .map(GroundDriveStrategy::weaponSummary)
                         .orElse("none"));
+        }
         if (intent == DriveIntent.RAM_TARGET) {
             return DriveRequest.ram(target);
         }
@@ -676,10 +741,12 @@ public final class GroundDriveStrategy implements DriveStrategy {
                 && vehicleRequest.preferStableFire()
                 && this.hasValidDriveTarget(vehicleRequest, null)
                 && ownRequest.intent() != DriveIntent.SUPPORT_FIRE) {
-            VehicleAiLogger.debugEvery(this.mob, 20,
+            if (VehicleAiLogger.shouldLog(this.mob, 20)) {
+                VehicleAiLogger.debug(this.mob,
                     "Drive using vehicle shared support-fire request target={} ownIntent={}",
                     vehicleRequest.targetEntity().map(Entity::getId).orElse(-1),
                     ownRequest.intent());
+            }
             return vehicleRequest;
         }
         return ownRequest;
@@ -692,10 +759,12 @@ public final class GroundDriveStrategy implements DriveStrategy {
         Entity target = request.targetEntity().orElse(null);
         Optional<CurrentWeaponSnapshot> fixedWeapon = this.currentUsableFixedWeapon(target);
         if (fixedWeapon.isPresent()) {
-            VehicleAiLogger.debugEvery(this.mob, 20,
+            if (VehicleAiLogger.shouldLog(this.mob, 20)) {
+                VehicleAiLogger.debug(this.mob,
                     "Drive stable fire enabled: target={} weapon={}",
                     target == null ? -1 : target.getId(),
                     weaponSummary(fixedWeapon.get()));
+            }
             return request;
         }
         VehicleAiLogger.debugEvery(this.mob, 20,
@@ -786,41 +855,88 @@ public final class GroundDriveStrategy implements DriveStrategy {
     }
 
     private void planPath(DriveRequest request) {
+        this.narrowPath = false;
+        this.narrowPathAttempted = false;
         VehicleDimensions dimensions = this.controller.pathingDimensions();
         PathTarget pathTarget = this.pathTarget(request);
+        PathPlanKey nextKey = pathTarget == null ? null : this.pathPlanKey(request, pathTarget, dimensions);
+        if (this.lastPathPlanKey == null || nextKey == null
+                || this.lastPathPlanKey.routeIdentityChanged(nextKey)
+                || this.lastPathPlanKey.targetMovedSignificantly(nextKey)) {
+            this.reverseTurnWaypoint = null;
+        }
         if (pathTarget == null) {
             this.path = null;
-            this.lastPathPlanKey = null;
         } else if (request.path().isPresent() && this.path != request.path().get()) {
             this.path = request.path().get();
             this.path.setNextNodeIndex(0);
-            this.lastPathPlanKey = this.pathPlanKey(request, pathTarget, dimensions);
-        } else if (request.path().isPresent()) {
-            this.lastPathPlanKey = this.pathPlanKey(request, pathTarget, dimensions);
-        } else {
+        } else if (request.path().isEmpty()) {
             try (VehiclePathContext.Scope ignored = VehiclePathContext.push(this.mob, dimensions)) {
                 this.path = this.mob.getNavigation().createPath(pathTarget.targetBlock(), 1);
             }
-            this.lastPathPlanKey = this.pathPlanKey(request, pathTarget, dimensions);
+        }
+        this.lastPathPlanKey = nextKey;
+        if (pathTarget != null && (this.path == null || this.path.getNodeCount() <= 1
+                || (!this.path.canReach() && this.horizontalDistanceSqr(
+                nodeCenter(this.path.getEndNode()), pathTarget.targetPosition()) > this.nodePassDistanceSqr()))) {
+            boolean noProgress = this.path == null || this.path.getNodeCount() <= 1
+                    || Math.sqrt(this.horizontalDistanceSqr(nodeCenter(this.path.getEndNode()), pathTarget.targetPosition()))
+                    + Math.sqrt(this.nodePassDistanceSqr())
+                    >= Math.sqrt(this.horizontalDistanceSqr(this.controller.position(), pathTarget.targetPosition()));
+            if (noProgress || (this.hasStraightPathPrefix() && !this.hasConservativeStraightPathPrefix(dimensions))) {
+                this.planNarrowPath(pathTarget, dimensions);
+            }
         }
         this.replanTicks = CommonConfig.VEHICLE_PATH_REPLAN_INTERVAL.get();
-        VehicleAiLogger.debug(this.mob,
-                "Planned vehicle path detail intent={} source={} targetBlock={} targetEntity={} targetPos={} vehiclePos={} dimensions={} pathTarget={} nodes={} done={} nextIndex={} firstNode={} nextNode={} lastNode={} replanTicks={}",
-                request.intent(),
-                pathTarget == null ? "none" : pathTarget.source(),
-                pathTarget == null ? null : pathTarget.targetBlock(),
-                pathTarget == null ? -1 : pathTarget.targetEntityId(),
-                pathTarget == null ? null : pathTarget.targetPosition(),
-                this.controller.position(),
-                dimensions,
-                this.pathTargetSummary(this.path),
-                this.nodeCount(this.path),
-                this.path != null && this.path.isDone(),
-                this.nextNodeIndex(this.path),
-                this.nodeSummary(this.path, 0),
-                this.nextNodeSummary(this.path),
-                this.nodeSummary(this.path, this.nodeCount(this.path) - 1),
-                this.replanTicks);
+        if (VehicleAiLogger.isDebugEnabled()) {
+            VehicleAiLogger.debug(this.mob,
+                    "Planned vehicle path detail intent={} source={} targetBlock={} targetEntity={} targetPos={} vehiclePos={} narrow={} dimensions={} pathTarget={} nodes={} done={} nextIndex={} firstNode={} nextNode={} lastNode={} replanTicks={}",
+                    request.intent(),
+                    pathTarget == null ? "none" : pathTarget.source(),
+                    pathTarget == null ? null : pathTarget.targetBlock(),
+                    pathTarget == null ? -1 : pathTarget.targetEntityId(),
+                    pathTarget == null ? null : pathTarget.targetPosition(),
+                    this.controller.position(),
+                    this.narrowPath,
+                    dimensions,
+                    this.pathTargetSummary(this.path),
+                    this.nodeCount(this.path),
+                    this.path != null && this.path.isDone(),
+                    this.nextNodeIndex(this.path),
+                    this.nodeSummary(this.path, 0),
+                    this.nextNodeSummary(this.path),
+                    this.nodeSummary(this.path, this.nodeCount(this.path) - 1),
+                    this.replanTicks);
+        }
+    }
+
+    private boolean hasStraightPathPrefix() {
+        Vec3 from = this.controller.position();
+        return this.isPathSegmentClear(from,
+                from.add(this.forwardDirection().scale(8.0D)), this.controller.pathingDimensions());
+    }
+
+    private boolean hasConservativeStraightPathPrefix(VehicleDimensions dimensions) {
+        Vec3 from = this.controller.position();
+        double span = Math.ceil(dimensions.conservativeHorizontalSize());
+        return this.isPathSegmentClear(from,
+                from.add(this.forwardDirection().scale(8.0D)),
+                new VehicleDimensions(span, dimensions.height(), span));
+    }
+
+    private void planNarrowPath(PathTarget target, VehicleDimensions dimensions) {
+        this.narrowPathAttempted = true;
+        try (VehiclePathContext.Scope ignored = VehiclePathContext.push(this.mob, dimensions, true)) {
+            Path candidate = this.mob.getNavigation().createPath(target.targetBlock(), 1);
+            if (candidate != null && candidate.getNodeCount() > 1
+                    && (candidate.canReach()
+                    || Math.sqrt(this.horizontalDistanceSqr(nodeCenter(candidate.getEndNode()), target.targetPosition()))
+                    + Math.sqrt(this.nodePassDistanceSqr())
+                    < Math.sqrt(this.horizontalDistanceSqr(this.controller.position(), target.targetPosition())))) {
+                this.path = candidate;
+                this.narrowPath = true;
+            }
+        }
     }
 
     private boolean shouldReplanPath(DriveRequest request) {
@@ -878,48 +994,62 @@ public final class GroundDriveStrategy implements DriveStrategy {
         return new PathTarget(target.blockPosition(), target.getId(), target.position(), "mobTarget");
     }
 
-    private Vec3 nextWaypoint(DriveRequest request) {
-        if (request.intent() == DriveIntent.RAM_TARGET && request.targetEntity().isPresent()) {
+    private Vec3 nextWaypoint(DriveRequest request, boolean directRamTarget) {
+        if (directRamTarget) {
             Entity target = request.targetEntity().get();
-            if (target.isAlive() && this.shouldUseDirectRam(target)) {
-                Vec3 waypoint = target.position();
-                VehicleAiLogger.debugEvery(this.mob, 10,
-                        "Drive waypoint direct ram target={} vehiclePos={} targetPos={} horizontalDistance={} waypoint={}",
-                        target.getId(),
-                        this.controller.position(),
-                        waypoint,
-                        Math.sqrt(this.horizontalDistanceSqr(this.controller.position(), waypoint)),
-                        waypoint);
-                return waypoint;
-            }
+            Vec3 waypoint = target.position();
+            VehicleAiLogger.debugEvery(this.mob, 10,
+                    "Drive waypoint direct ram target={} vehiclePos={} targetPos={} horizontalDistance={} waypoint={}",
+                    target.getId(),
+                    this.controller.position(),
+                    waypoint,
+                    Math.sqrt(this.horizontalDistanceSqr(this.controller.position(), waypoint)),
+                    waypoint);
+            return waypoint;
         }
         if (this.path != null) {
             Vec3 position = this.controller.position();
             double passDistanceSqr = this.nodePassDistanceSqr();
             int beforeIndex = this.path.getNextNodeIndex();
-            int advanced = 0;
-            while (!this.path.isDone() && this.shouldAdvancePastNode(position, nodeCenter(this.path.getNextNode()), passDistanceSqr)) {
-                this.path.advance();
-                advanced++;
-            }
+            this.advancePastReachedNodes();
+            int advanced = this.path.getNextNodeIndex() - beforeIndex;
             if (!this.path.isDone()) {
                 Vec3 waypoint = this.lookaheadWaypoint(position);
-                VehicleAiLogger.debugEvery(this.mob, 10,
-                        "Drive waypoint path intent={} vehiclePos={} pathTarget={} nodes={} indexBefore={} indexAfter={} advanced={} nextNode={} waypoint={} waypointDistance={} lookahead={} passDistance={} speed={} dimensions={}",
-                        request.intent(),
-                        position,
-                        this.pathTargetSummary(this.path),
-                        this.path.getNodeCount(),
-                        beforeIndex,
-                        this.path.getNextNodeIndex(),
-                        advanced,
-                        this.nextNodeSummary(this.path),
-                        waypoint,
-                        Math.sqrt(this.horizontalDistanceSqr(position, waypoint)),
-                        this.lookaheadDistance(),
-                        Math.sqrt(passDistanceSqr),
-                        this.horizontalSpeed(),
-                        this.controller.pathingDimensions());
+                if (waypoint == null) {
+                    return null;
+                }
+                if (!this.narrowPath && !this.narrowPathAttempted
+                        && !this.isPathSegmentClear(
+                        position, waypoint, this.controller.pathingDimensions())
+                        && this.hasStraightPathPrefix()) {
+                    PathTarget target = this.pathTarget(request);
+                    if (target != null) {
+                        this.planNarrowPath(target, this.controller.pathingDimensions());
+                        this.advancePastReachedNodes();
+                        if (!this.path.isDone()) {
+                            waypoint = this.lookaheadWaypoint(position);
+                            if (waypoint == null) return null;
+                        }
+                    }
+                }
+                if (VehicleAiLogger.shouldLog(this.mob, 10)) {
+                    VehicleAiLogger.debug(this.mob,
+                            "Drive waypoint path intent={} vehiclePos={} pathTarget={} nodes={} indexBefore={} indexAfter={} advanced={} nextNode={} waypoint={} waypointDistance={} lookahead={} passDistance={} speed={} dimensions={}",
+                            request.intent(),
+                            position,
+                            this.pathTargetSummary(this.path),
+                            this.path.getNodeCount(),
+                            beforeIndex,
+                            this.path.getNextNodeIndex(),
+                            advanced,
+                            this.nextNodeSummary(this.path),
+                            waypoint,
+                            Math.sqrt(this.horizontalDistanceSqr(position, waypoint)),
+                            this.lookaheadDistance(),
+                            Math.sqrt(passDistanceSqr),
+                            this.horizontalSpeed(),
+                            this.controller.pathingDimensions());
+                }
                 return waypoint;
             }
             VehicleAiLogger.debugEvery(this.mob, 10,
@@ -939,7 +1069,7 @@ public final class GroundDriveStrategy implements DriveStrategy {
                     return this.lookaheadWaypoint(position);
                 }
             }
-            if (this.shouldRecoverFromExhaustedPath(request)) {
+            if (this.shouldRecoverFromExhaustedPath(request, directRamTarget)) {
                 this.beginManeuver(request, "path exhausted");
                 return null;
             }
@@ -984,11 +1114,27 @@ public final class GroundDriveStrategy implements DriveStrategy {
         return this.controller.hasLineOfSight(this.mob, target, aimEntity.getBoundingBox().getCenter());
     }
 
-    private boolean shouldAdvancePastNode(Vec3 position, Vec3 waypoint, double passDistanceSqr) {
-        if (this.path.canReach() && this.path.getNextNodeIndex() + 1 >= this.path.getNodeCount()) {
-            return false;
+    private void advancePastReachedNodes() {
+        Vec3 position = this.controller.position();
+        double passDistanceSqr = this.nodePassDistanceSqr();
+        while (!this.path.isDone()
+                && this.shouldAdvancePastNode(position, nodeCenter(this.path.getNextNode()), passDistanceSqr)) {
+            if (this.narrowPath && this.path.getNextNodeIndex() + 1 < this.path.getNodeCount()
+                    && !this.isPathSegmentClear(position,
+                    nodeCenter(this.path.getNode(this.path.getNextNodeIndex() + 1)), this.controller.pathingDimensions())) {
+                // Keep the straight lead until the complete body can take the next corner.
+                break;
+            }
+            this.path.advance();
         }
+    }
+
+    private boolean shouldAdvancePastNode(Vec3 position, Vec3 waypoint, double passDistanceSqr) {
         double distanceSqr = position.distanceToSqr(waypoint);
+        if (this.path.getNextNodeIndex() + 1 >= this.path.getNodeCount()) {
+            // A partial path's end is not a corner that can be skipped at cruising lookahead.
+            return !this.path.canReach() && distanceSqr <= 1.0D;
+        }
         if (distanceSqr <= passDistanceSqr) {
             return true;
         }
@@ -1019,19 +1165,61 @@ public final class GroundDriveStrategy implements DriveStrategy {
         int nodeCount = this.path.getNodeCount();
         double remaining = this.lookaheadDistance();
         Vec3 previous = position;
-        Vec3 fallback = nodeCenter(this.path.getNode(index));
+        Vec3 fallback = null;
         for (int i = index; i < nodeCount; i++) {
             Vec3 point = nodeCenter(this.path.getNode(i));
             double segmentLength = previous.distanceTo(point);
             if (segmentLength >= remaining && segmentLength > 1.0E-4D) {
                 Vec3 direction = point.subtract(previous).scale(1.0D / segmentLength);
-                return previous.add(direction.scale(remaining));
+                return this.clearLookahead(position, previous.add(direction.scale(remaining)), index);
             }
             remaining -= segmentLength;
             previous = point;
             fallback = point;
         }
+        return this.clearLookahead(position, fallback, index);
+    }
+
+    private Vec3 clearLookahead(Vec3 position, Vec3 candidate, int index) {
+        if (!this.narrowPath) {
+            return candidate;
+        }
+        VehicleDimensions dimensions = this.controller.pathingDimensions();
+        if (this.isPathSegmentClear(position, candidate, dimensions)) {
+            return candidate;
+        }
+        Vec3 fallback = null;
+        double lookaheadSqr = this.lookaheadDistance() * this.lookaheadDistance();
+        // Only shorten an obstructed shortcut; do not cut across a narrow-road corner.
+        for (int i = index; i < this.path.getNodeCount(); i++) {
+            Vec3 point = nodeCenter(this.path.getNode(i));
+            if (this.horizontalDistanceSqr(position, point) > lookaheadSqr) {
+                break;
+            }
+            if (this.isPathSegmentClear(position, point, dimensions)) {
+                fallback = point;
+            }
+        }
+        if (fallback == null) {
+            this.path = null;
+            this.replanTicks = 0;
+        }
         return fallback;
+    }
+
+    private boolean isPathSegmentClear(Vec3 from, Vec3 to, VehicleDimensions dimensions) {
+        PathSegment segment = new PathSegment(from, to, dimensions);
+        return this.pathClearance.computeIfAbsent(segment, ignored ->
+                GroundPathCollision.isClear(this.controller.level(), this.controller.entity(), from, to, dimensions));
+    }
+
+    private boolean shouldStopAtWaypoint(DriveRequest request, Vec3 waypoint) {
+        if (request.intent() == DriveIntent.RAM_TARGET) {
+            return false;
+        }
+        // A speed-dependent lookahead is guidance, not an arrival point.
+        return this.path == null || this.path.isDone()
+                || (this.path.canReach() && waypoint.equals(nodeCenter(this.path.getEndNode())));
     }
 
     private double lookaheadDistance() {
@@ -1052,6 +1240,15 @@ public final class GroundDriveStrategy implements DriveStrategy {
     private double horizontalSpeed() {
         Vec3 velocity = this.controller.velocity();
         return Math.sqrt(velocity.x * velocity.x + velocity.z * velocity.z);
+    }
+
+    private double longitudinalSpeed() {
+        return this.controller.velocity().dot(this.forwardDirection());
+    }
+
+    private Vec3 forwardDirection() {
+        double yaw = Math.toRadians(this.controller.yaw());
+        return new Vec3(-Math.sin(yaw), 0.0D, Math.cos(yaw));
     }
 
     private double horizontalDistanceSqr(Vec3 from, Vec3 to) {
@@ -1125,7 +1322,11 @@ public final class GroundDriveStrategy implements DriveStrategy {
             this.closingToTarget = false;
             this.brakingChaseBand = false;
         }
-        GroundClearance clearance = retreat ? GroundObstacleRadar.scan(this.controller) : null;
+        GroundClearance clearance = null;
+        if (retreat) {
+            this.refreshManeuverClearance(true);
+            clearance = this.maneuverClearance;
+        }
         if (VehicleAiLogger.isDebugEnabled() && this.mob.tickCount % 10 == 0) {
             VehicleAiLogger.debug(this.mob,
                     "Drive retreat decision target={} distance={} distanceSqr={} stopDistance={} startDistance={} retreat={} wasRetreating={} turnDirection={} clearance={} velocity={}",
@@ -1170,7 +1371,8 @@ public final class GroundDriveStrategy implements DriveStrategy {
         if (isRetreatInputBlocked(input, clearance, MANEUVER_EXIT_CLEARANCE)) {
             boolean fireWindow = this.hasCurrentVehicleFireWindow(target);
             boolean lineOfSight = fireWindow && this.hasFireWindowLineOfSight(target);
-            VehicleAiLogger.debugEvery(this.mob, 5,
+            if (VehicleAiLogger.shouldLog(this.mob, 5)) {
+                VehicleAiLogger.debug(this.mob,
                     "Drive retreat blocked target={} input={} clearance={} fireWindow={} lineOfSight={} targetVehicle={} velocity={} weaponWindows={}",
                     target.getId(),
                     input,
@@ -1180,6 +1382,7 @@ public final class GroundDriveStrategy implements DriveStrategy {
                     target.getVehicle() == null ? -1 : target.getVehicle().getId(),
                     this.controller.velocity(),
                     this.vehicleWeaponWindowSummary(target));
+            }
             this.path = null;
             if (fireWindow && lineOfSight) {
                 this.retreatBlockedRamTicks = 0;
@@ -1508,6 +1711,12 @@ public final class GroundDriveStrategy implements DriveStrategy {
             this.lastPosition = position;
             return;
         }
+        if (this.controller.entity().horizontalCollision
+                && this.controller.velocity().horizontalDistanceSqr() < 0.003D
+                && !this.isWithinDesiredDistance(request)) {
+            this.beginManeuver(request, "ground collision");
+            return;
+        }
         if (this.mob.tickCount % 10 != 0) {
             return;
         }
@@ -1534,6 +1743,7 @@ public final class GroundDriveStrategy implements DriveStrategy {
     }
 
     private void beginManeuver(DriveRequest request, String reason) {
+        this.reverseTurnWaypoint = null;
         this.state = State.MANEUVER;
         this.path = null;
         this.replanTicks = 0;
@@ -1542,9 +1752,9 @@ public final class GroundDriveStrategy implements DriveStrategy {
         int previousTurnDirection = this.turnDirection;
         this.turnDirection = 0;
         this.maneuverTicks = 0;
+        this.maneuverMultiPointTurn = false;
         this.maneuverStepTicks = 0;
         this.maneuverNoProgressTicks = 0;
-        this.lastRadarTick = this.mob.tickCount - MANEUVER_PROBE_INTERVAL;
         this.maneuverLastPosition = this.controller.position();
         this.maneuverLastYaw = this.controller.yaw();
         this.refreshManeuverClearance(true);
@@ -1553,7 +1763,18 @@ public final class GroundDriveStrategy implements DriveStrategy {
                 .map(this::yawDiffTo)
                 .orElse(0.0D);
         this.maneuverTurnDirection = selectManeuverTurnDirection(this.maneuverClearance, yawDiff, previousTurnDirection);
-        this.maneuverStep = selectInitialManeuverStep(this.maneuverClearance, GroundSteering.shouldBrake(this.controller));
+        GroundManeuverStep initialStep = selectInitialManeuverStep(this.maneuverClearance, false);
+        this.maneuverReverseStart = null;
+        if (this.controller.entity().horizontalCollision || initialStep == GroundManeuverStep.BACK_STRAIGHT) {
+            this.maneuverReverseStart = this.controller.position();
+            this.maneuverReverseForward = this.forwardDirection();
+        }
+        double longitudinalSpeed = this.longitudinalSpeed();
+        boolean changingDirection = initialStep == GroundManeuverStep.BACK_STRAIGHT
+                ? longitudinalSpeed > 0.01D : longitudinalSpeed < -0.01D;
+        this.maneuverStep = this.controller.entity().horizontalCollision
+                || (changingDirection && this.controller.velocity().horizontalDistanceSqr() > 0.0225D)
+                ? GroundManeuverStep.BRAKE : initialStep;
         VehicleAiLogger.debug(this.mob,
                 "Drive entering maneuver vehicle={} reason={} intent={} step={} turn={} clearance={} velocity={} position={}",
                 this.controller.entity().getId(),
@@ -1571,14 +1792,19 @@ public final class GroundDriveStrategy implements DriveStrategy {
             this.finishManeuver("request ended");
             return;
         }
-        if (this.maneuverTicks++ >= MANEUVER_MAX_TICKS) {
-            this.finishManeuver("timeout");
-            return;
-        }
-
+        this.maneuverTicks++;
         this.refreshManeuverClearance(false);
-        this.updateManeuverProgress();
+        if (this.replanTicks > 0) {
+            this.replanTicks--;
+        }
         VehicleInput input = this.maneuverInput(request);
+        boolean changingGear = input.brake() && this.maneuverStep != GroundManeuverStep.BRAKE;
+        if (!changingGear) {
+            this.updateManeuverProgress();
+        }
+        if (input.forward() && (input.left() || input.right())) {
+            this.maneuverTurnDirection = input.left() ? -1 : 1;
+        }
         VehicleAiLogger.debugEvery(this.mob, 10,
                 "Drive maneuver step={} ticks={} stepTicks={} noProgress={} clearance={} input={} velocity={}",
                 this.maneuverStep,
@@ -1594,44 +1820,99 @@ public final class GroundDriveStrategy implements DriveStrategy {
             this.controller.drive(this.mob, input);
         }
 
+        if (changingGear) {
+            return;
+        }
         this.maneuverStepTicks++;
-        this.advanceManeuverStepIfNeeded(request);
+        this.advanceManeuverStepIfNeeded(request, input);
     }
 
     private VehicleInput maneuverInput(DriveRequest request) {
-        return switch (this.maneuverStep) {
-            case BRAKE -> GroundSteering.brake(this.controller);
+        VehicleInput input = switch (this.maneuverStep) {
+            case BRAKE -> VehicleInput.BRAKE;
             case BACK_STRAIGHT -> GroundSteering.maneuverBack(0);
             case BACK_TURN -> GroundSteering.maneuverBack(this.maneuverTurnDirection);
             case SWING_FORWARD -> {
-                int turn = this.driveTargetPosition(request)
-                        .map(target -> selectManeuverForwardTurn(this.maneuverTurnDirection, this.yawDiffTo(target), this.maneuverClearance))
-                        .orElse(this.maneuverTurnDirection);
+                Vec3 waypoint = null;
+                if (this.path != null && !this.path.isDone() && this.path.getNodeCount() > 1) {
+                    this.advancePastReachedNodes();
+                    if (!this.path.isDone()) {
+                        waypoint = this.lookaheadWaypoint(this.controller.position());
+                        if (waypoint != null && !this.isPathSegmentClear(this.controller.position(),
+                                waypoint, this.controller.pathingDimensions())) {
+                            waypoint = null;
+                        }
+                    }
+                }
+                boolean pathGuidance = waypoint != null;
+                if (this.maneuverMultiPointTurn && !pathGuidance
+                        && !this.maneuverClearance.isOpen(MANEUVER_EXIT_CLEARANCE)) {
+                    // Both legs of a multi-point turn must add yaw, not undo the previous leg.
+                    yield GroundSteering.maneuverForward(this.maneuverTurnDirection, false);
+                }
+                if (waypoint == null) waypoint = this.driveTargetPosition(request).orElse(null);
+                int turn = waypoint == null ? this.maneuverTurnDirection
+                        : selectManeuverForwardTurn(pathGuidance ? 0 : this.maneuverTurnDirection,
+                        this.yawDiffTo(waypoint), this.maneuverClearance);
+                if (turn == 0 && !pathGuidance && this.maneuverReverseStart != null
+                        && this.maneuverClearance.front() < GroundObstacleRadar.RANGE) {
+                    turn = this.maneuverTurnDirection;
+                }
                 yield GroundSteering.maneuverForward(turn, false);
             }
         };
+        double speed = this.longitudinalSpeed();
+        if (this.maneuverMultiPointTurn
+                && ((input.forward() && speed < -0.05D) || (input.back() && speed > 0.05D))) {
+            return VehicleInput.BRAKE;
+        }
+        return input;
     }
 
-    private void advanceManeuverStepIfNeeded(DriveRequest request) {
-        VehicleInput input = this.maneuverInput(request);
-        if (shouldAbortManeuverPulse(input, this.maneuverClearance, this.maneuverStepTicks, this.maneuverNoProgressTicks)) {
+    private void advanceManeuverStepIfNeeded(DriveRequest request, VehicleInput input) {
+        if (input.brake() && this.maneuverStep != GroundManeuverStep.BRAKE) {
+            return;
+        }
+        if (input.forward() && this.maneuverStepTicks >= MANEUVER_STEP_MIN_TICKS
+                && this.controller.entity().horizontalCollision
+                && this.controller.velocity().horizontalDistanceSqr() < 0.003D
+                && !this.maneuverClearance.backBlocked(MANEUVER_BLOCKED_DISTANCE)) {
+            this.changeManeuverStep(GroundManeuverStep.BACK_STRAIGHT, "forward collision");
+            return;
+        }
+        if (shouldAbortManeuverPulse(input, this.maneuverClearance, this.maneuverStepTicks)) {
             this.abortManeuverPulse(input);
+            return;
+        }
+        if (input.back() && this.canSwingAfterBacking(request)) {
+            this.changeManeuverStep(GroundManeuverStep.SWING_FORWARD, "front cleared after backing");
             return;
         }
 
         switch (this.maneuverStep) {
             case BRAKE -> {
-                if (this.maneuverStepTicks >= 3 || !GroundSteering.shouldBrake(this.controller)) {
-                    this.changeManeuverStep(selectInitialManeuverStep(this.maneuverClearance, false), "brake complete");
+                if (this.maneuverStepTicks >= 3
+                        && !(this.maneuverClearance.frontBlocked(MANEUVER_CONTACT_DISTANCE)
+                        && this.maneuverClearance.backBlocked(MANEUVER_CONTACT_DISTANCE))) {
+                    if (!this.maneuverMultiPointTurn) {
+                        double yawDiff = this.driveTargetPosition(request).map(this::yawDiffTo).orElse(0.0D);
+                        this.maneuverTurnDirection = selectManeuverTurnDirection(this.maneuverClearance, yawDiff, 0);
+                    }
+                    GroundManeuverStep next = this.maneuverReverseStart != null
+                            && !this.maneuverClearance.backBlocked(MANEUVER_BLOCKED_DISTANCE)
+                            ? GroundManeuverStep.BACK_STRAIGHT : selectInitialManeuverStep(this.maneuverClearance, false);
+                    this.changeManeuverStep(next, "brake complete");
                 }
             }
             case BACK_STRAIGHT -> {
                 GroundManeuverStep nextStep = nextBackStraightStep(this.maneuverClearance, this.maneuverStepTicks, this.maneuverNoProgressTicks);
                 if (nextStep == GroundManeuverStep.SWING_FORWARD) {
                     this.changeManeuverStep(GroundManeuverStep.SWING_FORWARD, "front clearance preferred");
-                } else if (nextStep == GroundManeuverStep.BACK_TURN && this.maneuverNoProgressTicks >= MANEUVER_PROBE_INTERVAL) {
+                } else if (nextStep == GroundManeuverStep.BACK_TURN && this.maneuverNoProgressTicks >= 10) {
                     this.changeManeuverStep(GroundManeuverStep.BACK_TURN, "straight back no progress");
-                } else if (nextStep == GroundManeuverStep.BACK_TURN) {
+                } else if (nextStep == GroundManeuverStep.BACK_TURN
+                        && !this.maneuverClearance.sideSqueezed(MANEUVER_SIDE_SQUEEZE_DISTANCE)
+                        && this.maneuverClearance.front() < MANEUVER_EXIT_CLEARANCE) {
                     this.changeManeuverStep(GroundManeuverStep.BACK_TURN, "straight back complete");
                 }
             }
@@ -1646,7 +1927,9 @@ public final class GroundDriveStrategy implements DriveStrategy {
                 }
             }
             case SWING_FORWARD -> {
-                if (this.maneuverClearance.prefersBack()) {
+                if (this.maneuverStepTicks >= MANEUVER_STEP_MIN_TICKS
+                        && this.maneuverClearance.front() < MANEUVER_EXIT_CLEARANCE
+                        && this.maneuverClearance.back() > this.maneuverClearance.front() + 0.75D) {
                     this.changeManeuverStep(GroundManeuverStep.BACK_TURN, "back clearance preferred");
                 } else if (this.maneuverStepTicks >= 16 && this.maneuverNoProgressTicks >= 10) {
                     this.reverseManeuverTurnDirection("forward no progress");
@@ -1656,8 +1939,7 @@ public final class GroundDriveStrategy implements DriveStrategy {
                     if (pulseExpired || earlyExit) {
                         this.logManeuverExitDecision(request, pulseExpired, earlyExit);
                         Optional<Vec3> target = this.driveTargetPosition(request);
-                        VehicleInput nextInput = target.map(value -> this.postManeuverInput(request, value)).orElse(VehicleInput.NONE);
-                        if (target.isPresent() && canExitManeuverWithInput(nextInput, this.maneuverClearance)) {
+                        if (target.isPresent() && this.canResumePath(request, target.get())) {
                             this.finishManeuver("reacquire path");
                         }
                     }
@@ -1666,12 +1948,105 @@ public final class GroundDriveStrategy implements DriveStrategy {
         }
     }
 
+    private boolean canSwingAfterBacking(DriveRequest request) {
+        if (this.maneuverStepTicks < 6 || this.maneuverNoProgressTicks > 0
+                || this.maneuverReverseStart == null || this.longitudinalSpeed() > -0.05D
+                || this.maneuverClearance.front() < MANEUVER_EXIT_CLEARANCE
+                || this.lastRadarTick != this.mob.tickCount) {
+            return false;
+        }
+        double backedDistance = this.maneuverReverseStart.subtract(this.controller.position()).dot(this.maneuverReverseForward);
+        double requiredDistance = Math.max(1.5D, this.controller.localCollisionBounds().getZsize() * 0.35D);
+        if (backedDistance < requiredDistance) {
+            return false;
+        }
+        double yawDifference = this.driveTargetPosition(request).map(this::yawDiffTo).orElse(0.0D);
+        int turn = this.maneuverMultiPointTurn ? this.maneuverTurnDirection
+                : selectManeuverForwardTurn(this.maneuverTurnDirection, yawDifference, this.maneuverClearance);
+        if (turn == 0 && this.maneuverClearance.front() < GroundObstacleRadar.RANGE) {
+            turn = this.maneuverTurnDirection;
+        }
+        return (turn == 0 || (turn < 0 ? this.maneuverClearance.left() : this.maneuverClearance.right())
+                >= MANEUVER_SIDE_SQUEEZE_DISTANCE)
+                && GroundObstacleRadar.hasForwardTurnSpace(this.controller, turn, yawDifference);
+    }
+
+    private boolean canResumePath(DriveRequest request, Vec3 target) {
+        if (this.longitudinalSpeed() < 0.1D || this.controller.entity().horizontalCollision) {
+            return false;
+        }
+        Vec3 waypoint;
+        VehicleInput nextInput;
+        if (request.intent() == DriveIntent.RAM_TARGET
+                && request.targetEntity().filter(this::shouldUseDirectRam).isPresent()) {
+            waypoint = target;
+            nextInput = this.postManeuverInput(request, target);
+        } else {
+            if (this.replanTicks > 0 && this.path == null) {
+                return false;
+            }
+            if (this.replanTicks <= 0 && this.shouldReplanPath(request)) {
+                this.planPath(request);
+            }
+            if (this.path == null) {
+                return false;
+            }
+            this.advancePastReachedNodes();
+            if (this.path.getNodeCount() <= 1 || this.path.isDone() || (!this.path.canReach()
+                    && Math.sqrt(this.horizontalDistanceSqr(nodeCenter(this.path.getEndNode()), target))
+                    + Math.sqrt(this.nodePassDistanceSqr())
+                    >= Math.sqrt(this.horizontalDistanceSqr(this.controller.position(), target)))) {
+                // A partial path back to the same dead end is not a handoff out of recovery.
+                this.path = null;
+                return false;
+            }
+            waypoint = this.lookaheadWaypoint(this.controller.position());
+            if (waypoint == null) {
+                return false;
+            }
+            nextInput = GroundSteering.steerToward(this.controller, waypoint,
+                    this.horizontalDistanceSqr(this.controller.position(), waypoint),
+                    this.shouldStopAtWaypoint(request, waypoint),
+                    request.preferStableFire(), this.turnDirection).input();
+        }
+        boolean openSpace = this.maneuverClearance.isOpen(GroundObstacleRadar.RANGE);
+        // A wall beside a safe exit is not a reason to keep the recovery turn running.
+        if ((this.maneuverMultiPointTurn && (!nextInput.forward() || nextInput.back() || nextInput.brake()))
+                || (!openSpace && nextInput.back())
+                || (request.intent() == DriveIntent.RAM_TARGET && nextInput.brake()
+                && this.maneuverClearance.back() < MANEUVER_EXIT_CLEARANCE)
+                || (!nextInput.forward() && !nextInput.back() && !nextInput.brake())
+                || (this.maneuverMultiPointTurn && (!this.narrowPath || this.path == null)
+                && Math.abs(this.yawDiffTo(waypoint)) >= 35.0D)
+                || (this.maneuverMultiPointTurn && !this.isPathSegmentClear(this.controller.position(),
+                waypoint, this.controller.pathingDimensions()))
+                || !canExitManeuverWithInput(nextInput, this.maneuverClearance)) {
+            return false;
+        }
+        int nextTurn = nextInput.left() ? -1 : nextInput.right() ? 1 : 0;
+        return openSpace || nextTurn == 0 || (!this.maneuverMultiPointTurn && nextTurn == this.maneuverTurnDirection)
+                || (this.lastRadarTick == this.mob.tickCount
+                && GroundObstacleRadar.hasForwardTurnSpace(this.controller, nextTurn, this.yawDiffTo(waypoint)));
+    }
+
     private void abortManeuverPulse(VehicleInput input) {
+        if (this.maneuverClearance.frontBlocked(MANEUVER_CONTACT_DISTANCE)
+                && this.maneuverClearance.backBlocked(MANEUVER_CONTACT_DISTANCE)) {
+            this.changeManeuverStep(GroundManeuverStep.BRAKE, "both directions blocked");
+            return;
+        }
+        if (this.maneuverClearance.frontBlocked(MANEUVER_BLOCKED_DISTANCE)
+                && this.maneuverClearance.backBlocked(MANEUVER_BLOCKED_DISTANCE)) {
+            double movingClearance = input.forward() ? this.maneuverClearance.front() : this.maneuverClearance.back();
+            double oppositeClearance = input.forward() ? this.maneuverClearance.back() : this.maneuverClearance.front();
+            if (movingClearance >= oppositeClearance) {
+                return;
+            }
+        }
         if (input.forward()) {
-            this.maneuverTurnDirection = input.left() ? -1 : input.right() ? 1 : this.maneuverClearance.openSideDirection(this.maneuverTurnDirection);
             this.changeManeuverStep(GroundManeuverStep.BACK_TURN, "forward pulse blocked");
         } else if (input.back()) {
-            this.maneuverTurnDirection = input.left() ? 1 : input.right() ? -1 : this.maneuverClearance.openSideDirection(this.maneuverTurnDirection);
+            this.maneuverMultiPointTurn = true;
             this.changeManeuverStep(GroundManeuverStep.SWING_FORWARD, "back pulse blocked");
         }
     }
@@ -1702,6 +2077,14 @@ public final class GroundDriveStrategy implements DriveStrategy {
 
     private VehicleInput postManeuverInput(DriveRequest request, Vec3 target) {
         if (request.intent() == DriveIntent.RAM_TARGET) {
+            double distanceSqr = this.horizontalDistanceSqr(this.controller.position(), target);
+            double yawDiff = Math.abs(this.yawDiffTo(target));
+            if (this.ramWindupTicks > 0 ? shouldContinueRamWindup(distanceSqr, yawDiff)
+                    : shouldStartRamWindup(distanceSqr, yawDiff)) {
+                if (this.hasRamRunupSpace(target)) {
+                    return GroundSteering.ramWindupAway(this.controller, target, this.turnDirection).input();
+                }
+            }
             return GroundSteering.steerRamToward(this.controller, target, this.turnDirection).input();
         }
         if (isTargetDistanceIntent(request.intent()) && this.retreatingFromTarget) {
@@ -1782,12 +2165,16 @@ public final class GroundDriveStrategy implements DriveStrategy {
                 this.maneuverClearance,
                 this.maneuverTurnDirection,
                 this.controller.position());
+        if ((nextStep == GroundManeuverStep.BACK_STRAIGHT || nextStep == GroundManeuverStep.BACK_TURN)
+                && this.maneuverStep != GroundManeuverStep.BACK_STRAIGHT && this.maneuverStep != GroundManeuverStep.BACK_TURN) {
+            this.maneuverReverseStart = this.controller.position();
+            this.maneuverReverseForward = this.forwardDirection();
+        }
         this.maneuverStep = nextStep;
         this.maneuverStepTicks = 0;
         this.maneuverNoProgressTicks = 0;
         this.maneuverLastPosition = this.controller.position();
         this.maneuverLastYaw = this.controller.yaw();
-        this.refreshManeuverClearance(true);
     }
 
     private void reverseManeuverTurnDirection(String reason) {
@@ -1804,7 +2191,6 @@ public final class GroundDriveStrategy implements DriveStrategy {
         this.maneuverNoProgressTicks = 0;
         this.maneuverLastPosition = this.controller.position();
         this.maneuverLastYaw = this.controller.yaw();
-        this.refreshManeuverClearance(true);
     }
 
     private void finishManeuver(String reason) {
@@ -1815,20 +2201,21 @@ public final class GroundDriveStrategy implements DriveStrategy {
                 this.maneuverClearance,
                 this.controller.velocity(),
                 this.controller.position());
-        this.state = State.PLAN_PATH;
-        this.path = null;
-        this.replanTicks = 0;
+        this.state = this.path == null ? State.PLAN_PATH : State.FOLLOW_PATH;
         this.stuckTicks = 0;
         this.lastPosition = this.controller.position();
         this.resetManeuver(this.controller.position());
     }
 
     private void logManeuverExitDecision(DriveRequest request, boolean pulseExpired, boolean earlyExit) {
+        if (!VehicleAiLogger.shouldLog(this.mob, 5)) {
+            return;
+        }
         Optional<Vec3> target = this.driveTargetPosition(request);
         VehicleInput nextInput = target.map(value -> this.postManeuverInput(request, value)).orElse(VehicleInput.NONE);
         double yawDiff = target.map(this::yawDiffTo).orElse(0.0D);
         boolean canExit = target.isPresent() && canExitManeuverWithInput(nextInput, this.maneuverClearance);
-        VehicleAiLogger.debugEvery(this.mob, 5,
+        VehicleAiLogger.debug(this.mob,
                 "Drive maneuver exit decision step={} pulseExpired={} earlyExit={} canExit={} nextInput={} forwardPulseTicks={} stepTicks={} noProgress={} yawDiff={} clearance={} retreating={} closing={} velocity={} position={}",
                 this.maneuverStep,
                 pulseExpired,
@@ -1847,28 +2234,19 @@ public final class GroundDriveStrategy implements DriveStrategy {
     }
 
     private void refreshManeuverClearance(boolean force) {
-        if (!force && this.mob.tickCount - this.lastRadarTick < MANEUVER_PROBE_INTERVAL) {
+        if (this.lastRadarTick == this.mob.tickCount
+                || (!force && this.mob.tickCount - this.lastRadarTick < MANEUVER_PROBE_INTERVAL)) {
             return;
         }
-        GroundRadarSample sample = GroundObstacleRadar.sample(this.controller);
-        this.maneuverClearance = sample.clearance();
+        this.maneuverClearance = GroundObstacleRadar.scan(this.controller);
         this.lastRadarTick = this.mob.tickCount;
         if (VehicleAiLogger.isDebugEnabled() && (force || this.mob.tickCount % 10 == 0)) {
             VehicleAiLogger.debug(this.mob,
-                    "Drive maneuver radar vehicle={} yaw={} origin={} forward={} left={} sideOffset={} clearance={} frontRays=[center={},left={},right={}] backRays=[center={},left={},right={}] bbox={} velocity={}",
+                    "Drive maneuver radar vehicle={} yaw={} localBounds={} clearance={} bbox={} velocity={}",
                     this.controller.entity().getId(),
                     this.controller.yaw(),
-                    sample.origin(),
-                    sample.forward(),
-                    sample.left(),
-                    sample.sideOffset(),
-                    sample.clearance(),
-                    sample.frontCenter(),
-                    sample.frontLeft(),
-                    sample.frontRight(),
-                    sample.backCenter(),
-                    sample.backLeft(),
-                    sample.backRight(),
+                    this.controller.localCollisionBounds(),
+                    this.maneuverClearance,
                     this.controller.boundingBox(),
                     this.controller.velocity());
         }
@@ -1881,7 +2259,8 @@ public final class GroundDriveStrategy implements DriveStrategy {
         Vec3 position = this.controller.position();
         double movedSqr = this.horizontalDistanceSqr(position, this.maneuverLastPosition);
         double yawDelta = Math.abs(net.minecraft.util.Mth.wrapDegrees(this.controller.yaw() - this.maneuverLastYaw));
-        boolean progressByMove = movedSqr >= MANEUVER_PROGRESS_DISTANCE_SQR;
+        boolean progressByMove = movedSqr >= MANEUVER_PROGRESS_DISTANCE_SQR
+                || (movedSqr >= 0.0004D && this.longitudinalSpeed() < -0.02D);
         boolean progressByYaw = yawDelta >= MANEUVER_PROGRESS_YAW_DEGREES;
         VehicleAiLogger.debug(this.mob,
                 "Drive maneuver progress sample step={} movedSqr={} yawDelta={} progressByMove={} progressByYaw={} noProgressBefore={} position={} lastPosition={} yaw={} lastYaw={}",
@@ -1926,22 +2305,26 @@ public final class GroundDriveStrategy implements DriveStrategy {
     }
 
     private void resetManeuver(Vec3 position) {
+        this.reverseTurnWaypoint = null;
         this.maneuverTicks = 0;
+        this.maneuverMultiPointTurn = false;
         this.maneuverStepTicks = 0;
         this.maneuverNoProgressTicks = 0;
         this.maneuverTurnDirection = 0;
-        this.lastRadarTick = 0;
+        this.lastRadarTick = this.mob.tickCount - MANEUVER_PROBE_INTERVAL;
         this.maneuverStep = GroundManeuverStep.BRAKE;
         this.maneuverClearance = GroundClearance.open(GroundObstacleRadar.RANGE);
         this.maneuverLastPosition = position;
         this.maneuverLastYaw = this.controller == null ? 0.0F : this.controller.yaw();
+        this.maneuverReverseStart = null;
+        this.maneuverReverseForward = Vec3.ZERO;
     }
 
     static GroundManeuverStep selectInitialManeuverStep(GroundClearance clearance, boolean shouldBrake) {
         if (shouldBrake) {
             return GroundManeuverStep.BRAKE;
         }
-        if (clearance.prefersBack()) {
+        if (clearance.front() < MANEUVER_EXIT_CLEARANCE && clearance.prefersBack()) {
             return GroundManeuverStep.BACK_STRAIGHT;
         }
         return GroundManeuverStep.SWING_FORWARD;
@@ -1963,7 +2346,8 @@ public final class GroundDriveStrategy implements DriveStrategy {
     }
 
     static GroundManeuverStep nextBackStraightStep(GroundClearance clearance, int stepTicks, int noProgressTicks) {
-        if (!clearance.prefersBack()) {
+        if (stepTicks >= MANEUVER_STEP_MIN_TICKS && clearance.backBlocked(MANEUVER_BLOCKED_DISTANCE)
+                && clearance.front() >= MANEUVER_EXIT_CLEARANCE) {
             return GroundManeuverStep.SWING_FORWARD;
         }
         if (stepTicks >= MANEUVER_STEP_MIN_TICKS && noProgressTicks >= MANEUVER_PROBE_INTERVAL) {
@@ -1973,7 +2357,8 @@ public final class GroundDriveStrategy implements DriveStrategy {
     }
 
     static GroundManeuverStep nextBackTurnStep(GroundClearance clearance, int stepTicks, int noProgressTicks) {
-        if (!clearance.prefersBack()) {
+        if (stepTicks >= MANEUVER_STEP_MIN_TICKS && clearance.backBlocked(MANEUVER_BLOCKED_DISTANCE)
+                && clearance.front() >= MANEUVER_EXIT_CLEARANCE) {
             return GroundManeuverStep.SWING_FORWARD;
         }
         if (stepTicks >= 16 && noProgressTicks >= 10) {
@@ -1995,13 +2380,9 @@ public final class GroundDriveStrategy implements DriveStrategy {
         return yawDiffDegrees < 0.0D ? -1 : 1;
     }
 
-    static boolean shouldAbortManeuverPulse(VehicleInput input, GroundClearance clearance,
-                                            int stepTicks, int noProgressTicks) {
+    static boolean shouldAbortManeuverPulse(VehicleInput input, GroundClearance clearance, int stepTicks) {
         if (!input.forward() && !input.back()) {
             return false;
-        }
-        if (noProgressTicks >= MANEUVER_PROBE_INTERVAL) {
-            return true;
         }
         if (stepTicks < 2) {
             return false;
@@ -2020,26 +2401,26 @@ public final class GroundDriveStrategy implements DriveStrategy {
         return 12;
     }
 
-    private boolean shouldRecoverFromBlockedPath(DriveRequest request) {
+    private boolean shouldRecoverFromBlockedPath(DriveRequest request, boolean directRamTarget) {
         if (!this.canUseManeuver(request)) {
             return false;
         }
         if (request.intent() == DriveIntent.RAM_TARGET && request.targetEntity().isPresent()) {
             Entity target = request.targetEntity().get();
-            if (!target.isAlive() || this.shouldUseDirectRam(target)) {
+            if (!target.isAlive() || directRamTarget) {
                 return false;
             }
         }
         return this.path == null || this.path.isDone() || this.path.getNodeCount() <= 1;
     }
 
-    private boolean shouldRecoverFromExhaustedPath(DriveRequest request) {
+    private boolean shouldRecoverFromExhaustedPath(DriveRequest request, boolean directRamTarget) {
         if (!this.canUseManeuver(request)) {
             return false;
         }
         if (request.intent() == DriveIntent.RAM_TARGET && request.targetEntity().isPresent()) {
             Entity target = request.targetEntity().get();
-            return target.isAlive() && !this.shouldUseDirectRam(target);
+            return target.isAlive() && !directRamTarget;
         }
         return true;
     }
@@ -2052,8 +2433,8 @@ public final class GroundDriveStrategy implements DriveStrategy {
             }
             if (this.intent != other.intent
                     || this.targetEntityId != other.targetEntityId
-                    || Mth.ceil(this.dimensions.conservativeHorizontalSize())
-                    != Mth.ceil(other.dimensions.conservativeHorizontalSize())
+                    || Mth.ceil(this.dimensions.width()) != Mth.ceil(other.dimensions.width())
+                    || Mth.ceil(this.dimensions.length()) != Mth.ceil(other.dimensions.length())
                     || Mth.ceil(this.dimensions.height()) != Mth.ceil(other.dimensions.height())
                     || this.providedPathIdentity != other.providedPathIdentity) {
                 return true;
@@ -2072,6 +2453,9 @@ public final class GroundDriveStrategy implements DriveStrategy {
     }
 
     private record PathTarget(BlockPos targetBlock, int targetEntityId, Vec3 targetPosition, String source) {
+    }
+
+    private record PathSegment(Vec3 from, Vec3 to, VehicleDimensions dimensions) {
     }
 
     private enum State {

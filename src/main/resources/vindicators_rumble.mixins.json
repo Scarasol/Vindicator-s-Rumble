@@ -13,9 +13,12 @@
     "PathNavigationMixin",
     "TargetGoalMixin",
     "TargetingConditionsMixin",
+    "VehicleNodeEvaluatorMixin",
+    "VehicleWalkNodeEvaluatorMixin",
     "recruits.CommandEventsMixin",
     "recruits.RecruitMovementGoalMixin",
     "recruits.RecruitPathfinderMixin",
+    "recruits.RecruitVehicleNodeEvaluatorMixin",
     "sbw.GunRayFriendlyFireMixin",
     "sbw.MissileThreatMixin",
     "sbw.ProjectileFriendlyFireMixin",
@@ -23,8 +26,8 @@
     "sbw.SbwInventoryToolMixin",
     "sbw.VehicleAutoFireMixin",
     "sbw.VehicleHurtTargetMixin",
-    "sbw.VehiclePlayerFlightDebugMixin",
-    "sbw.VehicleNodeEvaluatorMixin"
+    "sbw.VehicleSmokeMixin",
+    "sbw.VehiclePlayerFlightDebugMixin"
   ],
   "client": [
     "recruits.ArmorStandRendererMixin",

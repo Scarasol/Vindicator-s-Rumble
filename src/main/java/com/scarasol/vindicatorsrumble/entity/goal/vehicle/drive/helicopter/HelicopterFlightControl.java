@@ -96,7 +96,8 @@ final class HelicopterFlightControl {
         boolean activeBrake = arrivalBrake || obstacleBrake || courseBrake;
         boolean hoverBrake = obstacleBrake || courseBrake
                 || arrivalBrake && horizontalError <= APPROACH_MIN_HORIZONTAL_ERROR;
-        boolean powerTrimDown = !pullOut && shouldDecreasePower(state, request, yError, recovery);
+        boolean powerTrimDown = (!pullOut || !needsPullOutPower(state, yError))
+                && shouldDecreasePower(state, request, yError, recovery);
         boolean lateralStabilizing = !pullOut && shouldStabilizeLaterally(state, request, activeBrake);
         boolean forward = shouldPressForward(state, request, yError, horizontalError, activeBrake,
                 recovery, pullOut, powerTrimDown, lateralStabilizing);
@@ -145,7 +146,8 @@ final class HelicopterFlightControl {
         double mouseY = engineReady ? clamp(pitchDiff / pitchScale, -mouseLimit, mouseLimit) : 0.0D;
 
         VehicleInput input = new VehicleInput(
-                forward && (!activeBrake || request.throttleThroughBrake() || recovery || pullOut),
+                forward && (!activeBrake || request.throttleThroughBrake() || recovery || pullOut
+                        || needsLiftPower(state, yError)),
                 back,
                 left,
                 right,
@@ -185,13 +187,16 @@ final class HelicopterFlightControl {
                 && state.power() < 0.11F) {
             return true;
         }
-        if (!request.approach() || activeBrake) {
+        if (!request.approach()) {
             return false;
         }
         boolean needsApproachPower = needsLiftPower(state, yError)
                 && state.power() < approachPowerThreshold(request);
         if (needsApproachPower) {
             return true;
+        }
+        if (activeBrake) {
+            return false;
         }
         return horizontalError >= APPROACH_MIN_HORIZONTAL_ERROR
                 && !lateralStabilizing
@@ -208,7 +213,6 @@ final class HelicopterFlightControl {
                 || recovery
                 || request.takeoff()
                 || request.forceForward()
-                || request.pullOutPower()
                 || state.power() < APPROACH_ALTITUDE_TRIM_POWER) {
             return false;
         }
@@ -304,13 +308,14 @@ final class HelicopterFlightControl {
         double turnScale = turnCruiseScale(movementYawError(state, request));
         double pitch = (basePitch + alignmentPitch * distanceFactor) * turnScale;
         double direction = movementDirectionSign(state, request);
-        double cruiseSpeed = request.cruiseSpeed();
+        double climbScale = climbCruiseScale(state, request);
+        double cruiseSpeed = request.cruiseSpeed() * climbScale;
         double movementSpeed = horizontalClosingSpeed(state, request.desiredPosition());
         double speedScale = clamp((cruiseSpeed - movementSpeed) / APPROACH_SPEED_CONTROL_BAND,
                 -0.3D,
                 1.0D);
         double rollScale = clamp(1.0D - Math.abs(state.roll()) / 45.0D, 0.0D, 1.0D);
-        return direction * pitch * speedScale * rollScale;
+        return direction * pitch * speedScale * rollScale * climbScale;
     }
 
     private static boolean shouldBrakeForArrival(HelicopterFlightPlanner.AircraftState state,
@@ -367,7 +372,7 @@ final class HelicopterFlightControl {
     }
 
     private static boolean needsPullOutPower(HelicopterFlightPlanner.AircraftState state, double yError) {
-        return yError > VERTICAL_TOLERANCE
+        return needsLiftPower(state, yError)
                 || state.velocity().y < RECOVERY_DESCENT_SPEED
                 || state.pitch() > 30.0F;
     }
@@ -428,7 +433,15 @@ final class HelicopterFlightControl {
     private static Vec3 movementVelocity(HelicopterFlightPlanner.AircraftState state,
                                          HelicopterFlightPlanner.FlightRequest request) {
         return request.desiredPosition().subtract(state.position()).multiply(1.0D, 0.0D, 1.0D)
-                .normalize().scale(request.cruiseSpeed());
+                .normalize().scale(request.cruiseSpeed() * climbCruiseScale(state, request));
+    }
+
+    private static double climbCruiseScale(HelicopterFlightPlanner.AircraftState state,
+                                           HelicopterFlightPlanner.FlightRequest request) {
+        double horizontal = horizontalDistance(state.position(), request.desiredPosition());
+        double climb = Math.max(0.0D, projectedYError(state,
+                request.desiredPosition().y - state.position().y));
+        return horizontal < 1.0E-4D ? 0.0D : horizontal / Math.hypot(horizontal, climb);
     }
 
     private static double yawDiffTo(HelicopterFlightPlanner.AircraftState state, Vec3 point) {

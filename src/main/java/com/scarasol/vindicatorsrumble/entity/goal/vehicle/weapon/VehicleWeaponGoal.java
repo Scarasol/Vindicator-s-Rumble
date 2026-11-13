@@ -66,13 +66,15 @@ public class VehicleWeaponGoal extends Goal implements VehicleAiGoal {
             return false;
         }
         if (!VehicleAiTuning.isValidVehicleCombatTarget(this.mob, target)) {
-            VehicleAiLogger.debugEvery(this.mob, 40,
-                    "Weapon canUse=false: target {} invalid for combat effectiveFollowRange={} distanceSqr={} alive={} sameSide={}",
-                    target.getId(),
-                    VehicleAiTuning.followRange(this.mob),
-                    VehicleAiTuning.targetDistanceToSqr(this.mob, target),
-                    target.isAlive(),
-                    AllegianceUtil.isSameSide(this.mob, target));
+            if (VehicleAiLogger.shouldLog(this.mob, 40)) {
+                VehicleAiLogger.debugEvery(this.mob, 40,
+                        "Weapon canUse=false: target {} invalid for combat effectiveFollowRange={} distanceSqr={} alive={} sameSide={}",
+                        target.getId(),
+                        VehicleAiTuning.followRange(this.mob),
+                        VehicleAiTuning.targetDistanceToSqr(this.mob, target),
+                        target.isAlive(),
+                        AllegianceUtil.isSameSide(this.mob, target));
+            }
             return false;
         }
         Optional<VehicleController> current = VehicleControllers.forMob(this.mob);
@@ -86,7 +88,7 @@ public class VehicleWeaponGoal extends Goal implements VehicleAiGoal {
             return false;
         }
         this.controller = current.get();
-        this.selectedWeapon = this.chooseWeapon(weapons, target).orElse(null);
+        this.selectedWeapon = this.evaluateWeapons(weapons, target).map(WeaponEvaluation::weapon).orElse(null);
         if (this.selectedWeapon == null) {
             VehicleAiLogger.debugEvery(this.mob, 40, "Weapon canUse=false: no weapon with ammo on vehicle {}", this.controller.entity().getId());
             this.controller = null;
@@ -103,9 +105,9 @@ public class VehicleWeaponGoal extends Goal implements VehicleAiGoal {
         return shouldContinueLifecycle(
                 this.stopRequested,
                 this.controller != null && this.controller.isValid(),
-                this.mob.isPassenger(),
+                this.controller != null && this.mob.getVehicle() == this.controller.entity(),
                 VehicleAiTuning.isValidVehicleCombatTarget(this.mob, target),
-                this.controller != null && !this.controller.weapons(this.mob).isEmpty());
+                this.selectedWeapon != null);
     }
 
     @Override
@@ -135,36 +137,40 @@ public class VehicleWeaponGoal extends Goal implements VehicleAiGoal {
             return;
         }
         if (!VehicleAiTuning.isValidVehicleCombatTarget(this.mob, target)) {
-            VehicleAiLogger.debugEvery(this.mob, 20,
-                    "Weapon stopping: target {} invalid for combat effectiveFollowRange={} distanceSqr={}",
-                    target.getId(),
-                    VehicleAiTuning.followRange(this.mob),
-                    VehicleAiTuning.targetDistanceToSqr(this.mob, target));
+            if (VehicleAiLogger.shouldLog(this.mob, 20)) {
+                VehicleAiLogger.debugEvery(this.mob, 20,
+                        "Weapon stopping: target {} invalid for combat effectiveFollowRange={} distanceSqr={}",
+                        target.getId(),
+                        VehicleAiTuning.followRange(this.mob),
+                        VehicleAiTuning.targetDistanceToSqr(this.mob, target));
+            }
             this.requestStop();
             return;
         }
 
         List<WeaponHandle> weapons = this.controller.weapons(this.mob);
-        Optional<WeaponHandle> preferredWeapon = this.chooseWeapon(weapons, target);
+        Optional<WeaponEvaluation> preferredWeapon = this.evaluateWeapons(weapons, target);
         if (preferredWeapon.isEmpty()) {
             VehicleAiLogger.debugEvery(this.mob, 20, "Weapon stopping: no weapon with ammo on vehicle {}", this.controller.entity().getId());
             this.requestStop();
             return;
         }
-        if (!preferredWeapon.get().equals(this.selectedWeapon)) {
+        WeaponEvaluation evaluation = preferredWeapon.get();
+        if (!evaluation.weapon().equals(this.selectedWeapon)) {
             VehicleAiLogger.debug(this.mob,
                     "Weapon switching {}({}) -> {}({}) target={} heavyTarget={}",
                     this.selectedWeapon.name(),
                     this.selectedWeapon.payloadType(),
-                    preferredWeapon.get().name(),
-                    preferredWeapon.get().payloadType(),
+                    evaluation.weapon().name(),
+                    evaluation.weapon().payloadType(),
                     target.getId(),
                     prefersHeavyWeapon(target));
-            this.selectedWeapon = preferredWeapon.get();
+            this.selectedWeapon = evaluation.weapon();
         }
         this.trackAimSettling(target, this.selectedWeapon);
 
-        boolean selected = this.controller.selectWeapon(this.mob, this.selectedWeapon);
+        boolean alreadySelected = evaluation.status().selected();
+        boolean selected = alreadySelected || this.controller.selectWeapon(this.mob, this.selectedWeapon);
         WeaponStatus status = this.controller.weaponStatus(this.mob, this.selectedWeapon);
         double actualDistance = this.mob.distanceTo(target);
         double cadenceDistance = cadenceDistance(actualDistance, this.controller.movementType(), this.selectedWeapon);
@@ -173,8 +179,11 @@ public class VehicleWeaponGoal extends Goal implements VehicleAiGoal {
             fireStep = this.selectedWeapon.fireStep(cadenceDistance, false);
             this.fireProgress = advanceFireProgress(this.fireProgress, fireStep);
         }
-        Vec3 aimPoint = this.controller.aimPoint(this.mob, target, this.selectedWeapon);
-        WeaponFireWindow fireWindow = this.controller.fireWindow(this.mob, target, aimPoint, this.selectedWeapon);
+        // Geometry is reusable only before any selection or aim mutation in this tick.
+        Vec3 aimPoint = alreadySelected ? evaluation.aimPoint()
+                : this.controller.aimPoint(this.mob, target, this.selectedWeapon);
+        WeaponFireWindow fireWindow = alreadySelected ? evaluation.fireWindow()
+                : this.controller.fireWindow(this.mob, target, aimPoint, this.selectedWeapon);
         int seatId = this.controller.seatOf(this.mob).map(SeatHandle::id).orElse(-1);
         CurrentWeaponSnapshot currentWeapon = CurrentWeaponSnapshot.of(
                 this.controller.entity().getUUID(),
@@ -187,7 +196,8 @@ public class VehicleWeaponGoal extends Goal implements VehicleAiGoal {
                 this.fireProgress,
                 fireWindow);
         VehicleAiMemory.setCurrentWeapon(this.mob, currentWeapon, 10);
-        VehicleAiLogger.debugEvery(this.mob, 20,
+        if (VehicleAiLogger.shouldLog(this.mob, 20)) {
+            VehicleAiLogger.debug(this.mob,
                 "Weapon status selectedResult={} selected={} canFire={} needsReload={} reloading={} coolingDown={} hasAmmo={} heat={} fireMode={} rpm={} actionCycleTicks={} fireProgress={} fireReady={} fireWindow={} yawError={} pitchError={} estimatedMiss={}",
                 selected,
                 status.selected(),
@@ -206,19 +216,22 @@ public class VehicleWeaponGoal extends Goal implements VehicleAiGoal {
                 fireWindow.yawErrorDegrees(),
                 fireWindow.pitchErrorDegrees(),
                 fireWindow.estimatedMiss());
+        }
 
         boolean fixedAim = this.selectedWeapon.requiresVehicleAim();
         boolean stableFire = shouldRequestStableFire(currentWeapon);
         this.mob.getLookControl().setLookAt(target, 30.0F, 30.0F);
         boolean aimed = this.controller.aimAt(this.mob, target, aimPoint);
-        VehicleAiLogger.debugEvery(this.mob, 20,
-                "Weapon aiming at target {} aimPoint={} result={} fixedAim={} stableFire={} hasAmmo={}",
-                target.getId(),
-                aimPoint,
-                aimed,
-                fixedAim,
-                stableFire,
-                status.hasAmmo());
+        if (VehicleAiLogger.shouldLog(this.mob, 20)) {
+            VehicleAiLogger.debugEvery(this.mob, 20,
+                    "Weapon aiming at target {} aimPoint={} result={} fixedAim={} stableFire={} hasAmmo={}",
+                    target.getId(),
+                    aimPoint,
+                    aimed,
+                    fixedAim,
+                    stableFire,
+                    status.hasAmmo());
+        }
         if (!aimed) {
             this.alignedTicks = 0;
             VehicleAiLogger.debugEvery(this.mob, 10, "Weapon waiting for aim control before firing {}", this.selectedWeapon.name());
@@ -239,7 +252,6 @@ public class VehicleWeaponGoal extends Goal implements VehicleAiGoal {
         }
 
         if (status.needsReload()) {
-            VehicleAiLogger.debug(this.mob, "Reloading vehicle weapon {}", this.selectedWeapon.name());
             this.controller.reload(this.mob);
             this.cooldown = 20;
             this.fireProgress = 0.0D;
@@ -266,19 +278,21 @@ public class VehicleWeaponGoal extends Goal implements VehicleAiGoal {
                 return;
             }
             if (this.fireProgress < 1.0D) {
-                VehicleAiLogger.debugEvery(this.mob, 5,
-                        "Weapon waiting for fire cadence before firing {} progress={} step={} mode={} rpm={} distance={} cadenceDistance={}",
-                        this.selectedWeapon.name(),
-                        this.fireProgress,
-                        fireStep,
-                        this.selectedWeapon.fireMode(),
-                        this.selectedWeapon.rpm(),
-                        actualDistance,
-                        cadenceDistance);
+                if (VehicleAiLogger.shouldLog(this.mob, 20)) {
+                    VehicleAiLogger.debugEvery(this.mob, 20,
+                            "Weapon waiting for fire cadence before firing {} progress={} step={} mode={} rpm={} distance={} cadenceDistance={}",
+                            this.selectedWeapon.name(),
+                            this.fireProgress,
+                            fireStep,
+                            this.selectedWeapon.fireMode(),
+                            this.selectedWeapon.rpm(),
+                            actualDistance,
+                            cadenceDistance);
+                }
                 return;
             }
             if (!shouldFireWeapon(status)) {
-                VehicleAiLogger.debugEvery(this.mob, 5,
+                VehicleAiLogger.debugEvery(this.mob, 20,
                         "Weapon cadence ready but controller cannot fire {} canFire={} reloading={} coolingDown={} hasAmmo={}",
                         this.selectedWeapon.name(),
                         status.canFire(),
@@ -287,12 +301,13 @@ public class VehicleWeaponGoal extends Goal implements VehicleAiGoal {
                         status.hasAmmo());
                 return;
             }
-            VehicleAiLogger.debug(this.mob, "Firing vehicle weapon {} at {}", this.selectedWeapon.name(), target.getId());
             boolean fired = this.controller.fire(this.mob, target, aimPoint, this.selectedWeapon);
             if (fired) {
                 this.fireProgress = 0.0D;
+            } else {
+                VehicleAiLogger.debugEvery(this.mob, 20, "Vehicle weapon fire rejected weapon={} target={}",
+                        this.selectedWeapon.name(), target.getId());
             }
-            VehicleAiLogger.debug(this.mob, "Fire call result={} for weapon {}", fired, this.selectedWeapon.name());
         } else {
             VehicleAiLogger.debugEvery(this.mob, 20, "Weapon cannot fire this tick");
         }
@@ -369,15 +384,31 @@ public class VehicleWeaponGoal extends Goal implements VehicleAiGoal {
         VehicleAiMemory.clearCurrentWeapon(this.mob);
     }
 
-    private Optional<WeaponHandle> chooseWeapon(List<WeaponHandle> weapons, LivingEntity target) {
-        List<WeaponStatus> statuses = new ArrayList<>(weapons.size());
-        List<WeaponFireWindow> fireWindows = new ArrayList<>(weapons.size());
+    private Optional<WeaponEvaluation> evaluateWeapons(List<WeaponHandle> weapons, LivingEntity target) {
+        WeaponEvaluation best = null;
+        int bestScore = Integer.MAX_VALUE;
+        boolean preferHeavy = prefersHeavyWeapon(target);
         for (WeaponHandle weapon : weapons) {
-            statuses.add(this.controller.weaponStatus(this.mob, weapon));
+            WeaponStatus status = this.controller.weaponStatus(this.mob, weapon);
+            if (!isSelectableWeaponStatus(status)) {
+                continue;
+            }
             Vec3 aimPoint = this.controller.aimPoint(this.mob, target, weapon);
-            fireWindows.add(this.controller.fireWindow(this.mob, target, aimPoint, weapon));
+            WeaponFireWindow window = this.controller.fireWindow(this.mob, target, aimPoint, weapon);
+            if (!isSelectableFireWindow(window)) {
+                continue;
+            }
+            int score = selectionScore(weapon, status, window, preferHeavy, this.selectedWeapon);
+            if (score < bestScore) {
+                bestScore = score;
+                best = new WeaponEvaluation(weapon, status, aimPoint, window);
+            }
         }
-        return chooseWeapon(weapons, statuses, fireWindows, prefersHeavyWeapon(target), this.selectedWeapon);
+        return Optional.ofNullable(best);
+    }
+
+    private record WeaponEvaluation(WeaponHandle weapon, WeaponStatus status, Vec3 aimPoint,
+                                    WeaponFireWindow fireWindow) {
     }
 
     static Optional<WeaponHandle> chooseWeapon(List<WeaponHandle> weapons, List<WeaponStatus> statuses, boolean preferHeavy, WeaponHandle currentWeapon) {
@@ -400,17 +431,22 @@ public class VehicleWeaponGoal extends Goal implements VehicleAiGoal {
             if (!isSelectableFireWindow(fireWindow)) {
                 continue;
             }
-            int score = payloadScore(weapon, preferHeavy) * 10_000
-                    + fireReadinessScore(status) * 1_000
-                    + fireWindowScore(fireWindow) * 250
-                    + sameWeaponScore(weapon, currentWeapon) * 100
-                    + weapon.priority();
+            int score = selectionScore(weapon, status, fireWindow, preferHeavy, currentWeapon);
             if (score < bestScore) {
                 best = weapon;
                 bestScore = score;
             }
         }
         return Optional.ofNullable(best);
+    }
+
+    private static int selectionScore(WeaponHandle weapon, WeaponStatus status, WeaponFireWindow fireWindow,
+                                      boolean preferHeavy, WeaponHandle currentWeapon) {
+        return payloadScore(weapon, preferHeavy) * 10_000
+                + fireReadinessScore(status) * 1_000
+                + fireWindowScore(fireWindow) * 250
+                + sameWeaponScore(weapon, currentWeapon) * 100
+                + weapon.priority();
     }
 
     private static List<WeaponFireWindow> unknownFireWindows(int count) {

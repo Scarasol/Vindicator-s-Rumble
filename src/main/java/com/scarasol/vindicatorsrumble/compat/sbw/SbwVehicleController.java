@@ -13,6 +13,14 @@ import com.atsuishio.superbwarfare.data.vehicle.subdata.EngineType;
 import com.atsuishio.superbwarfare.data.vehicle.subdata.EngineInfo;
 import com.atsuishio.superbwarfare.data.vehicle.subdata.SeatInfo;
 import com.atsuishio.superbwarfare.entity.vehicle.base.VehicleEntity;
+import com.atsuishio.superbwarfare.entity.projectile.Agm65Entity;
+import com.atsuishio.superbwarfare.entity.projectile.IglaMissileEntity;
+import com.atsuishio.superbwarfare.entity.projectile.JavelinMissileEntity;
+import com.atsuishio.superbwarfare.entity.projectile.MissileProjectile;
+import com.atsuishio.superbwarfare.entity.projectile.Ru9m100MissileEntity;
+import com.atsuishio.superbwarfare.entity.projectile.Ru9m336MissileEntity;
+import com.atsuishio.superbwarfare.entity.projectile.SwarmDroneEntity;
+import com.atsuishio.superbwarfare.tools.EntityFindUtil;
 import com.atsuishio.superbwarfare.tools.RangeTool;
 import com.scarasol.vindicatorsrumble.api.vehicle.SeatHandle;
 import com.scarasol.vindicatorsrumble.api.vehicle.VehicleController;
@@ -28,6 +36,8 @@ import com.scarasol.vindicatorsrumble.api.vehicle.WeaponPayloadType;
 import com.scarasol.vindicatorsrumble.api.vehicle.WeaponStatus;
 import com.scarasol.vindicatorsrumble.config.CommonConfig;
 import com.scarasol.vindicatorsrumble.util.VehicleAiLogger;
+import com.scarasol.vindicatorsrumble.util.VehicleSmokeDefense;
+import com.scarasol.vindicatorsrumble.util.AllegianceUtil;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
@@ -80,6 +90,18 @@ public class SbwVehicleController implements VehicleController {
     }
 
     @Override
+    public AABB localCollisionBounds() {
+        var collision = this.vehicle.getCollisionOBBInfo();
+        if (collision == null) {
+            return VehicleController.super.localCollisionBounds();
+        }
+        var center = collision.getPosition();
+        var halfSize = collision.getSize();
+        return new AABB(center.x - halfSize.x, center.y - halfSize.y, center.z - halfSize.z,
+                center.x + halfSize.x, center.y + halfSize.y, center.z + halfSize.z);
+    }
+
+    @Override
     public double horizontalFootprintRadius() {
         var collision = this.vehicle.getCollisionOBBInfo();
         return collision == null ? VehicleController.super.horizontalFootprintRadius()
@@ -99,7 +121,7 @@ public class SbwVehicleController implements VehicleController {
 
     @Override
     public boolean isControllable() {
-        return this.isValid() && !this.isWreck() && !this.seats().isEmpty();
+        return this.isValid() && !this.isWreck() && this.vehicle.getMaxPassengers() > 0;
     }
 
     @Override
@@ -215,11 +237,14 @@ public class SbwVehicleController implements VehicleController {
 
     @Override
     public VehicleDimensions pathingDimensions() {
-        AABB box = this.vehicle.getBoundingBox();
+        AABB world = this.vehicle.getBoundingBox();
+        // VehicleDimensions already reserves the diagonal; do not rotate the footprint twice.
+        boolean localFootprint = this.usesGroundNavigation() && this.vehicle.getCollisionOBBInfo() != null;
+        AABB box = localFootprint ? this.localCollisionBounds() : world;
         return new VehicleDimensions(
-                Math.max(1.0D, box.getXsize()),
-                Math.max(1.0D, box.getYsize()),
-                Math.max(1.0D, box.getZsize())
+                Math.max(1.0D, localFootprint ? 2.0D * Math.max(Math.abs(box.minX), Math.abs(box.maxX)) : box.getXsize()),
+                Math.max(1.0D, Math.max(box.getYsize(), world.getYsize())),
+                Math.max(1.0D, localFootprint ? 2.0D * Math.max(Math.abs(box.minZ), Math.abs(box.maxZ)) : box.getZsize())
         );
     }
 
@@ -227,11 +252,7 @@ public class SbwVehicleController implements VehicleController {
     public List<SeatHandle> seats() {
         int count = this.vehicle.getMaxPassengers();
         List<SeatHandle> seats = new ArrayList<>(count);
-        VehicleMovementType movementType = this.movementType();
-        boolean canDriveVehicle = movementType == VehicleMovementType.WHEEL
-                || movementType == VehicleMovementType.TRACK
-                || movementType == VehicleMovementType.SHIP
-                || movementType == VehicleMovementType.HELICOPTER;
+        boolean canDriveVehicle = this.supportsDriving();
         for (int i = 0; i < count; i++) {
             Entity occupant = this.vehicle.getNthEntity(i);
             boolean canDrive = i == 0 && canDriveVehicle;
@@ -243,7 +264,16 @@ public class SbwVehicleController implements VehicleController {
     @Override
     public Optional<SeatHandle> seatOf(Mob mob) {
         int index = this.vehicle.getSeatIndex(mob);
-        return this.seats().stream().filter(seat -> seat.id() == index).findFirst();
+        return index < 0 || index >= this.vehicle.getMaxPassengers() ? Optional.empty()
+                : Optional.of(new SeatHandle(index, index == 0 && this.supportsDriving(),
+                this.hasMountedWeapon(index), Optional.of(mob)));
+    }
+
+    private boolean supportsDriving() {
+        return switch (this.movementType()) {
+            case WHEEL, TRACK, SHIP, HELICOPTER -> true;
+            default -> false;
+        };
     }
 
     @Override
@@ -293,14 +323,7 @@ public class SbwVehicleController implements VehicleController {
     @Override
     public boolean canDrive(Mob mob) {
         int seatIndex = this.vehicle.getSeatIndex(mob);
-        boolean canDrive = this.seatOf(mob).map(SeatHandle::canDrive).orElse(false);
-        VehicleAiLogger.debugEvery(mob, 40, "SBW canDrive={} vehicle={} seat={} movement={} firstPassenger={}",
-                canDrive,
-                this.vehicle.getId(),
-                seatIndex,
-                this.movementType(),
-                this.vehicle.getFirstPassenger() == null ? -1 : this.vehicle.getFirstPassenger().getId());
-        return canDrive;
+        return seatIndex == 0 && this.vehicle.getMaxPassengers() > 0 && this.supportsDriving();
     }
 
     @Override
@@ -312,18 +335,18 @@ public class SbwVehicleController implements VehicleController {
         if (!CommonConfig.VEHICLE_AI_NEEDS_FUEL.get()) {
             this.refillVehicleEnergy();
         }
-        short keys = toSbwKeys(input);
-        if (input.brake() && this.vehicle.computed().getEngineType() == EngineType.WHEEL) {
-            keys &= (short) ~(SBW_LEFT_KEY | SBW_RIGHT_KEY);
-        }
+        input = VehicleSmokeDefense.applyInput(mob, this, input);
+        short keys = this.toSbwGroundKeys(input);
         this.vehicle.processInput(keys);
-        VehicleAiLogger.debugEvery(mob, 20, "SBW processInput vehicle={} seat={} keys={} input={} velocity={} energy={}",
+        if (VehicleAiLogger.shouldLog(mob, 40)) {
+            VehicleAiLogger.debugEvery(mob, 40, "SBW processInput vehicle={} seat={} keys={} input={} velocity={} energy={}",
                 this.vehicle.getId(),
                 this.vehicle.getSeatIndex(mob),
                 keys,
                 input,
                 this.vehicle.getDeltaMovement(),
                 this.vehicle.hasEnergyStorage() ? this.vehicle.getEnergy() : -1);
+        }
     }
 
     @Override
@@ -337,8 +360,12 @@ public class SbwVehicleController implements VehicleController {
         }
         this.vehicle.mouseInput(input.mouseX(), input.mouseY());
         short keys = this.toSbwFlightKeys(input);
+        if (VehicleSmokeDefense.requestDeployment(mob, this)) {
+            keys |= 0b001000000;
+        }
         this.vehicle.processInput(keys);
-        VehicleAiLogger.debugEvery(mob, 20,
+        if (VehicleAiLogger.shouldLog(mob, 40)) {
+            VehicleAiLogger.debugEvery(mob, 40,
                 "SBW flightInput vehicle={} seat={} keys={} input={} mouseX={} mouseY={} rollTarget={} velocity={} hover={} power={} energy={}",
                 this.vehicle.getId(),
                 this.vehicle.getSeatIndex(mob),
@@ -351,6 +378,7 @@ public class SbwVehicleController implements VehicleController {
                 this.vehicle.getHoverMode(),
                 this.vehicle.getPower(),
                 this.vehicle.hasEnergyStorage() ? this.vehicle.getEnergy() : -1);
+        }
     }
 
     @Override
@@ -358,8 +386,12 @@ public class SbwVehicleController implements VehicleController {
         if (CommonConfig.VEHICLE_AI_NEEDS_FUEL.get()) {
             this.refillVehicleEnergy();
         }
-        if (this.vehicle.hasDecoy() && !this.vehicle.hasSmokeDecoy() && this.vehicle.getDecoyCount() == 0) {
-            this.vehicle.setDecoyCount(this.vehicle.computed().getDecoyMagazineSize());
+        if (this.vehicle.hasDecoy() && this.vehicle.getDecoyCount() == 0) {
+            this.vehicle.setDecoyCount(this.vehicle.hasSmokeDecoy()
+                    ? 1 : this.vehicle.computed().getDecoyMagazineSize());
+            if (this.vehicle.hasSmokeDecoy()) {
+                this.vehicle.setDecoyReloadCoolDown(0);
+            }
         }
         if (!CommonConfig.VEHICLE_AI_NEEDS_AMMO.get()) {
             return;
@@ -388,6 +420,33 @@ public class SbwVehicleController implements VehicleController {
     public boolean canDeployDecoy() {
         return !this.isWreck() && this.vehicle.hasDecoy() && !this.vehicle.hasSmokeDecoy()
                 && this.vehicle.getDecoyCount() > 0;
+    }
+
+    @Override
+    public boolean supportsSmoke() {
+        return this.vehicle.hasDecoy() && this.vehicle.hasSmokeDecoy();
+    }
+
+    @Override
+    public boolean canDeploySmoke() {
+        return this.isValid() && this.isControllable() && !this.isWreck() && this.supportsSmoke()
+                && this.vehicle.getDecoyCount() > 0 && this.vehicle.getDecoyReloadCoolDown() == 0;
+    }
+
+    @Override
+    public boolean isSmokeEffectiveAgainst(Entity source) {
+        if (!(source instanceof MissileProjectile missile) || !missile.isAlive()
+                || missile.isLost() || missile.isLostTarget() || missile.isDistracted()
+                || missile.getOwner() == null || missile.level() != this.vehicle.level()
+                || AllegianceUtil.isSameSide(this.vehicle.getFirstPassenger(), missile.getOwner())) {
+            return false;
+        }
+        boolean entityGuided = missile instanceof IglaMissileEntity || missile instanceof JavelinMissileEntity
+                || missile instanceof Ru9m100MissileEntity || missile instanceof Ru9m336MissileEntity
+                || (missile instanceof SwarmDroneEntity || missile instanceof Agm65Entity)
+                && missile.getGuideType() == 0;
+        Entity target = entityGuided ? EntityFindUtil.findEntity(missile.level(), missile.getTargetUUID()) : null;
+        return target != null && target.getRootVehicle() == this.vehicle.getRootVehicle();
     }
 
     @Override
@@ -427,7 +486,7 @@ public class SbwVehicleController implements VehicleController {
             if (this.supportsFlightControl()) {
                 this.vehicle.mouseInput(0.0D, 0.0D);
             }
-            this.vehicle.processInput((short) 0);
+            this.vehicle.processInput(toSbwKeys(VehicleSmokeDefense.applyInput(mob, this, VehicleInput.NONE)));
             VehicleAiLogger.debugEvery(mob, 20, "SBW stopDriving vehicle={} seat={}", this.vehicle.getId(), this.vehicle.getSeatIndex(mob));
         }
     }
@@ -458,7 +517,8 @@ public class SbwVehicleController implements VehicleController {
                         this.actionCycleTicks(data)));
             }
         }
-        VehicleAiLogger.debugEvery(mob, 40,
+        if (VehicleAiLogger.shouldLog(mob, 40)) {
+            VehicleAiLogger.debugEvery(mob, 40,
                 "SBW weapons vehicle={} seat={} names={} usable={} skippedRiderAimed={} aimModes={} payloads={} fireModes={} rpm={} actionCycleTicks={}",
                 this.vehicle.getId(),
                 seatIndex,
@@ -470,6 +530,7 @@ public class SbwVehicleController implements VehicleController {
                 weapons.stream().map(WeaponHandle::fireMode).toList(),
                 weapons.stream().map(WeaponHandle::rpm).toList(),
                 weapons.stream().map(WeaponHandle::actionCycleTicks).toList());
+        }
         return weapons;
     }
 
@@ -579,13 +640,8 @@ public class SbwVehicleController implements VehicleController {
         int heat = this.vehicle.getWeaponHeat(seatIndex, weapon.id());
         boolean overheated = data.overHeat.get() || heat > 100;
         boolean coolingDown = hasAmmo && !needsReload && !reloading && overheated;
-        int ammoCost = data.get(GunProp.AMMO_COST_PER_SHOOT);
-        int ammoCount = this.vehicle.getAmmoCount(seatIndex);
-        int backupAmmo = data.countBackupAmmo(this.vehicle);
-        int magazine = data.get(GunProp.MAGAZINE);
-        boolean backpackAmmo = data.useBackpackAmmo();
-        boolean infiniteBackup = data.hasInfiniteBackupAmmo(this.vehicle);
-        VehicleAiLogger.debugEvery(mob, 20,
+        if (VehicleAiLogger.shouldLog(mob, 40)) {
+            VehicleAiLogger.debugEvery(mob, 40,
                 "SBW weaponStatus vehicle={} seat={} weapon={} selected={} canFire={} needsReload={} reloading={} coolingDown={} hasAmmo={} ammoCount={} ammoCost={} backupAmmo={} magazine={} backpackAmmo={} infiniteBackup={} heat={} overheated={} readyToShoot={} sbwCanShoot={}",
                 this.vehicle.getId(),
                 seatIndex,
@@ -596,16 +652,17 @@ public class SbwVehicleController implements VehicleController {
                 reloading,
                 coolingDown,
                 hasAmmo,
-                ammoCount,
-                ammoCost,
-                backupAmmo,
-                magazine,
-                backpackAmmo,
-                infiniteBackup,
+                this.vehicle.getAmmoCount(seatIndex),
+                data.get(GunProp.AMMO_COST_PER_SHOOT),
+                data.countBackupAmmo(this.vehicle),
+                data.get(GunProp.MAGAZINE),
+                data.useBackpackAmmo(),
+                data.hasInfiniteBackupAmmo(this.vehicle),
                 heat,
                 overheated,
                 readyToShoot,
                 this.vehicle.canShoot(mob));
+        }
         return new WeaponStatus(selected, canFire, needsReload, reloading, coolingDown, hasAmmo, heat);
     }
 
@@ -652,7 +709,9 @@ public class SbwVehicleController implements VehicleController {
             VehicleAiLogger.debugEvery(mob, 20, "SBW selectWeapon failed: invalid seat on vehicle {}", this.vehicle.getId());
             return false;
         }
-        this.vehicle.changeWeapon(seatIndex, weapon.id(), false);
+        if (this.vehicle.getWeaponIndex(seatIndex) != weapon.id()) {
+            this.vehicle.changeWeapon(seatIndex, weapon.id(), false);
+        }
         boolean selected = this.vehicle.getWeaponIndex(seatIndex) == weapon.id();
         VehicleAiLogger.debugEvery(mob, 20, "SBW selectWeapon vehicle={} seat={} weapon={} result={}", this.vehicle.getId(), seatIndex, weapon.id(), selected);
         return selected;
@@ -696,7 +755,8 @@ public class SbwVehicleController implements VehicleController {
             controlledBySbwTarget = true;
         }
 
-        VehicleAiLogger.debugEvery(mob, 20,
+        if (VehicleAiLogger.shouldLog(mob, 40)) {
+            VehicleAiLogger.debugEvery(mob, 40,
                 "SBW aimAt vehicle={} seat={} weapon={} name={} target={} aimMode={} sbwTargetControl={} aimPoint={} targetUuid={} aiTurretTarget={} aiPassengerWeaponTarget={} aimDebug={}",
                 this.vehicle.getId(),
                 seatIndex,
@@ -710,6 +770,7 @@ public class SbwVehicleController implements VehicleController {
                 this.vehicle.getAiTurretTargetUUID(),
                 this.vehicle.getAiPassengerWeaponTargetUUID(),
                 this.aimDebugSummary(mob, seatIndex, data));
+        }
         return controlledBySbwTarget || aimMode == WeaponAimMode.VEHICLE_FIXED;
     }
 
@@ -731,15 +792,17 @@ public class SbwVehicleController implements VehicleController {
                 ClipContext.Fluid.NONE,
                 this.vehicle));
         boolean clear = hit.getType() == HitResult.Type.MISS || hit.getLocation().distanceToSqr(end) <= 0.25D;
-        VehicleAiLogger.debugEvery(mob, 20,
-                "SBW line of sight vehicle={} seat={} target={} clear={} start={} end={} hit={}",
-                this.vehicle.getId(),
-                this.vehicle.getSeatIndex(mob),
-                target.getId(),
-                clear,
-                start,
-                end,
-                hit.getType());
+        if (VehicleAiLogger.shouldLog(mob, 40)) {
+            VehicleAiLogger.debugEvery(mob, 40,
+                    "SBW line of sight vehicle={} seat={} target={} clear={} start={} end={} hit={}",
+                    this.vehicle.getId(),
+                    this.vehicle.getSeatIndex(mob),
+                    target.getId(),
+                    clear,
+                    start,
+                    end,
+                    hit.getType());
+        }
         return clear;
     }
 
@@ -785,25 +848,27 @@ public class SbwVehicleController implements VehicleController {
             window = WeaponFireWindow.needsPosture(yawError, pitchError, metrics.estimatedMiss());
         }
 
-        VehicleAiLogger.debugEvery(mob, 20,
-                "SBW fire window vehicle={} seat={} weapon={} name={} target={} aimMode={} state={} targetYaw={} targetPitch={} yawRange=[{},{}] pitchRange=[{},{}] yawError={} pitchError={} shotAngleDeg={} estimatedMiss={}",
-                this.vehicle.getId(),
-                seatIndex,
-                weapon.id(),
-                weapon.name(),
-                target.getId(),
-                metrics.aimMode(),
-                window.state(),
-                targetYaw,
-                targetPitch,
-                range.minYaw(),
-                range.maxYaw(),
-                range.minPitch(),
-                range.maxPitch(),
-                yawError,
-                pitchError,
-                metrics.angleDegrees(),
-                metrics.estimatedMiss());
+        if (VehicleAiLogger.shouldLog(mob, 40)) {
+            VehicleAiLogger.debugEvery(mob, 40,
+                    "SBW fire window vehicle={} seat={} weapon={} name={} target={} aimMode={} state={} targetYaw={} targetPitch={} yawRange=[{},{}] pitchRange=[{},{}] yawError={} pitchError={} shotAngleDeg={} estimatedMiss={}",
+                    this.vehicle.getId(),
+                    seatIndex,
+                    weapon.id(),
+                    weapon.name(),
+                    target.getId(),
+                    metrics.aimMode(),
+                    window.state(),
+                    targetYaw,
+                    targetPitch,
+                    range.minYaw(),
+                    range.maxYaw(),
+                    range.minPitch(),
+                    range.maxPitch(),
+                    yawError,
+                    pitchError,
+                    metrics.angleDegrees(),
+                    metrics.estimatedMiss());
+        }
         return window;
     }
 
@@ -832,8 +897,9 @@ public class SbwVehicleController implements VehicleController {
         }
 
         boolean aligned = metrics.angleDegrees() <= thresholdDegrees;
-        GunData data = this.vehicle.getGunData(seatIndex, weaponIndex);
-        VehicleAiLogger.debugEvery(mob, 10,
+        if (VehicleAiLogger.shouldLog(mob, 40)) {
+            GunData data = this.vehicle.getGunData(seatIndex, weaponIndex);
+            VehicleAiLogger.debugEvery(mob, 40,
                 "SBW aim alignment vehicle={} seat={} selectedWeapon={} checkedWeapon={} weaponName={} target={} aimMode={} aimPoint={} aligned={} shotAngleDeg={} thresholdDeg={} shotDistance={} shotEstimatedMiss={} directionSource={} vehicleYaw={} mobYaw={} shootPos={} shootDir={} targetDir={} dot={} fireDirection={} fireDirectionForHud={} seekDirection={} aimDebug={}",
                 this.vehicle.getId(),
                 seatIndex,
@@ -859,6 +925,7 @@ public class SbwVehicleController implements VehicleController {
                 directionSummary(data == null ? null : data.fireDirectionForHud()),
                 seekDirectionSummary(data),
                 this.aimDebugSummary(mob, seatIndex, data));
+        }
         return aligned;
     }
 
@@ -1125,7 +1192,8 @@ public class SbwVehicleController implements VehicleController {
         }
         GunData data = this.vehicle.getGunData(seatIndex);
         boolean canShootBefore = data != null && this.vehicle.canShoot(mob);
-        int heatBefore = this.vehicle.getWeaponHeat(seatIndex);
+        boolean debug = VehicleAiLogger.isDebugEnabled();
+        int heatBefore = debug ? this.vehicle.getWeaponHeat(seatIndex) : 0;
         int weaponIndex = weapon == null ? this.vehicle.getWeaponIndex(seatIndex) : weapon.id();
         boolean groundTarget = this.prefersGroundTarget(mob, target, weaponIndex);
         UUID targetUuid = groundTarget ? null : target.getUUID();
@@ -1133,18 +1201,64 @@ public class SbwVehicleController implements VehicleController {
         AimMetrics metrics = this.aimMetrics(mob, target, weaponIndex, aimPoint);
         double thresholdDegrees = this.fireAlignmentThreshold(weapon);
         if (!metrics.valid() || metrics.angleDegrees() > thresholdDegrees) {
-            VehicleAiLogger.debugEvery(mob, 10,
-                    "SBW fire blocked by aim alignment vehicle={} seat={} target={} groundTarget={} selectedWeapon={} checkedWeapon={} weaponName={} aimMode={} shotAngleDeg={} thresholdDeg={} shotDistance={} shotEstimatedMiss={} directionSource={} vehicleYaw={} mobYaw={} shootPos={} shootDir={} targetDir={} dot={}",
+            if (VehicleAiLogger.shouldLog(mob, 20)) {
+                VehicleAiLogger.debugEvery(mob, 20,
+                        "SBW fire blocked by aim alignment vehicle={} seat={} target={} groundTarget={} selectedWeapon={} checkedWeapon={} weaponName={} aimMode={} shotAngleDeg={} thresholdDeg={} shotDistance={} shotEstimatedMiss={} directionSource={} vehicleYaw={} mobYaw={} shootPos={} shootDir={} targetDir={} dot={}",
+                        this.vehicle.getId(),
+                        seatIndex,
+                        target.getId(),
+                        groundTarget,
+                        this.vehicle.getWeaponIndex(seatIndex),
+                        weaponIndex,
+                        this.weaponName(seatIndex, weaponIndex),
+                        metrics.aimMode(),
+                        metrics.valid() ? metrics.angleDegrees() : -1.0D,
+                        thresholdDegrees,
+                        metrics.valid() ? metrics.distance() : -1.0D,
+                        metrics.valid() ? metrics.estimatedMiss() : -1.0D,
+                        metrics.directionSource(),
+                        this.vehicle.getYRot(),
+                        mob.getYRot(),
+                        metrics.shootPosition(),
+                        metrics.shootDirection(),
+                        metrics.targetDirection(),
+                        metrics.dot());
+            }
+            return false;
+        }
+        if (!canShootBefore) {
+            if (VehicleAiLogger.shouldLog(mob, 20)) {
+                VehicleAiLogger.debugEvery(mob, 20,
+                        "SBW fire skipped vehicle={} seat={} target={} groundTarget={} heat={} selectedWeapon={} shotAngleDeg={} shotDistance={} shotEstimatedMiss={}",
+                        this.vehicle.getId(),
+                        seatIndex,
+                        target.getId(),
+                        groundTarget,
+                        heatBefore,
+                        this.vehicle.getWeaponIndex(seatIndex),
+                        metrics.valid() ? metrics.angleDegrees() : -1.0D,
+                        metrics.valid() ? metrics.distance() : -1.0D,
+                        metrics.valid() ? metrics.estimatedMiss() : -1.0D);
+            }
+            return false;
+        }
+        this.vehicle.vehicleShoot(mob, targetUuid, targetPos);
+        if (debug) {
+            VehicleAiLogger.debug(mob,
+                    "SBW fire called vehicle={} seat={} target={} aimPoint={} groundTarget={} canShootBefore={} heatBefore={} heatAfter={} selectedWeapon={} checkedWeapon={} weaponName={} aimMode={} shotAngleDeg={} shotDistance={} shotEstimatedMiss={} directionSource={} vehicleYaw={} mobYaw={} shootPos={} shootDir={} targetDir={} dot={}",
                     this.vehicle.getId(),
                     seatIndex,
                     target.getId(),
+                    targetPos,
                     groundTarget,
+                    canShootBefore,
+                    heatBefore,
+                    this.vehicle.getWeaponHeat(seatIndex),
                     this.vehicle.getWeaponIndex(seatIndex),
                     weaponIndex,
                     this.weaponName(seatIndex, weaponIndex),
                     metrics.aimMode(),
                     metrics.valid() ? metrics.angleDegrees() : -1.0D,
-                    thresholdDegrees,
                     metrics.valid() ? metrics.distance() : -1.0D,
                     metrics.valid() ? metrics.estimatedMiss() : -1.0D,
                     metrics.directionSource(),
@@ -1154,48 +1268,7 @@ public class SbwVehicleController implements VehicleController {
                     metrics.shootDirection(),
                     metrics.targetDirection(),
                     metrics.dot());
-            return false;
         }
-        if (!canShootBefore) {
-            VehicleAiLogger.debugEvery(mob, 10,
-                    "SBW fire skipped vehicle={} seat={} target={} groundTarget={} heat={} selectedWeapon={} shotAngleDeg={} shotDistance={} shotEstimatedMiss={}",
-                    this.vehicle.getId(),
-                    seatIndex,
-                    target.getId(),
-                    groundTarget,
-                    heatBefore,
-                    this.vehicle.getWeaponIndex(seatIndex),
-                    metrics.valid() ? metrics.angleDegrees() : -1.0D,
-                    metrics.valid() ? metrics.distance() : -1.0D,
-                    metrics.valid() ? metrics.estimatedMiss() : -1.0D);
-            return false;
-        }
-        this.vehicle.vehicleShoot(mob, targetUuid, targetPos);
-        int heatAfter = this.vehicle.getWeaponHeat(seatIndex);
-        VehicleAiLogger.debug(mob,
-                "SBW fire called vehicle={} seat={} target={} aimPoint={} groundTarget={} canShootBefore={} heatBefore={} heatAfter={} selectedWeapon={} checkedWeapon={} weaponName={} aimMode={} shotAngleDeg={} shotDistance={} shotEstimatedMiss={} directionSource={} vehicleYaw={} mobYaw={} shootPos={} shootDir={} targetDir={} dot={}",
-                this.vehicle.getId(),
-                seatIndex,
-                target.getId(),
-                targetPos,
-                groundTarget,
-                canShootBefore,
-                heatBefore,
-                heatAfter,
-                this.vehicle.getWeaponIndex(seatIndex),
-                weaponIndex,
-                this.weaponName(seatIndex, weaponIndex),
-                metrics.aimMode(),
-                metrics.valid() ? metrics.angleDegrees() : -1.0D,
-                metrics.valid() ? metrics.distance() : -1.0D,
-                metrics.valid() ? metrics.estimatedMiss() : -1.0D,
-                metrics.directionSource(),
-                this.vehicle.getYRot(),
-                mob.getYRot(),
-                metrics.shootPosition(),
-                metrics.shootDirection(),
-                metrics.targetDirection(),
-                metrics.dot());
         return canShootBefore;
     }
 
@@ -1370,6 +1443,35 @@ public class SbwVehicleController implements VehicleController {
             }
         }
         return false;
+    }
+
+    private short toSbwGroundKeys(VehicleInput input) {
+        short keys = toSbwKeys(input);
+        if (this.vehicle.computed().getEngineType() != EngineType.WHEEL) {
+            return keys;
+        }
+        if (input.brake()) {
+            return (short) (keys & ~(SBW_LEFT_KEY | SBW_RIGHT_KEY));
+        }
+        if (input.left() == input.right() || !(this.vehicle.getEngineInfo() instanceof EngineInfo.Wheel engine)) {
+            return keys;
+        }
+        // wheelEngine changes power before yaw; its steering sign follows power, not velocity.
+        float power = this.vehicle.getPower();
+        float maxPower = input.sprint() ? 1.3F : power > 1.0F ? power - 0.002F : 1.0F;
+        float powerRate = !this.vehicle.onGround() && this.vehicle.isInFluidType() ? 0.1F : 1.0F;
+        if (input.forward() && !input.back()) {
+            power = Math.min(power + (power < 0.0F ? 2.0F : 1.0F) * engine.getIncrement()
+                    * powerRate * (maxPower - Math.abs(power) / 1.02F), maxPower);
+        }
+        if (input.back()) {
+            power = Math.max(power - (power > 0.0F ? 4.0F : 1.0F) * engine.getDecrement()
+                    * powerRate * (maxPower - Math.abs(power) / 1.02F), -1.0F);
+        }
+        if ((power <= 0.0F) != input.back()) {
+            keys ^= SBW_LEFT_KEY | SBW_RIGHT_KEY;
+        }
+        return keys;
     }
 
     private static short toSbwKeys(VehicleInput input) {

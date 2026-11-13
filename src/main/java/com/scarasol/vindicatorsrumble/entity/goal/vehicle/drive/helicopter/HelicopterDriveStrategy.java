@@ -165,47 +165,48 @@ public final class HelicopterDriveStrategy implements DriveStrategy {
         if (decoy) this.nextDecoyTick = gameTime + DECOY_RELEASE_INTERVAL_TICKS;
         VehicleFlightInput input = this.flightControl.command(aircraftState, plan.flightRequest(), environment, decoy);
         this.updateFixedAttackState(target, aircraftState, plan);
-        double targetHorizontalDistance = target == null ? 0.0D
-                : horizontalDistance(aircraftState.position(), targetCenter(target));
-        double combatDistance = CommonConfig.HELICOPTER_COMBAT_DISTANCE.get();
-        boolean retreating = target != null
-                && targetHorizontalDistance < combatDistance - HelicopterFlightPlanner.INNER_COMBAT_TOLERANCE;
-        boolean closing = target != null
-                && targetHorizontalDistance > combatDistance + HelicopterFlightPlanner.OUTER_COMBAT_TOLERANCE;
-        VehicleAiLogger.debugEvery(this.mob, retreating || pressure != null || airFirePressure != null
-                        || plan.phase() == HelicopterFlightPlanner.Phase.EVASIVE_PASS ? 1 : 10,
-                "Helicopter flight tick={} phase={} target={} desired={} aim={} cruise={} stopAtDestination={} retreating={} closing={} stableFire={} fixedWeaponReady={} fixedWeaponAimed={} attackActive={} attackRecover={} targetH={} altitude={} pitch={} roll={} yaw={} hover={} power={} los={} frontBlocked={} elevatedFrontClear={} terrainY={} clearances=[front={},elevated={}] pressure={} airFirePressure={} threat={} input={}",
-                this.mob.tickCount,
-                plan.phase(),
-                target == null ? -1 : target.getId(),
-                plan.desiredPosition(),
-                plan.aimPoint(),
-                plan.cruiseSpeed(),
-                plan.stopAtDestination(),
-                retreating,
-                closing,
-                stableFire,
-                fixedWeaponReady,
-                fixedWeaponAimed,
-                this.helicopterFixedAttackActive,
-                this.helicopterFixedAttackRecoveryTicks,
-                targetHorizontalDistance,
-                aircraftState.altitude(),
-                aircraftState.pitch(),
-                aircraftState.roll(),
-                aircraftState.yaw(),
-                aircraftState.hoverMode(),
-                aircraftState.power(),
-                environment.hasLineOfSight(),
-                environment.frontBlocked(),
-                environment.elevatedFrontClear(),
-                environment.terrainPreferredY(),
-                environment.frontClearance(),
-                environment.elevatedFrontClearance(),
-                pressure == null ? -1 : pressure.getId(),
-                airFirePressure == null ? -1 : airFirePressure.getId(),
-                threat == null ? null : threat.stage(),
-                input);
+        if (VehicleAiLogger.shouldLog(this.mob, 20)) {
+            double targetHorizontalDistance = target == null ? 0.0D
+                    : horizontalDistance(aircraftState.position(), targetCenter(target));
+            double combatDistance = CommonConfig.HELICOPTER_COMBAT_DISTANCE.get();
+            boolean retreating = target != null
+                    && targetHorizontalDistance < combatDistance - HelicopterFlightPlanner.INNER_COMBAT_TOLERANCE;
+            boolean closing = target != null
+                    && targetHorizontalDistance > combatDistance + HelicopterFlightPlanner.OUTER_COMBAT_TOLERANCE;
+            VehicleAiLogger.debugEvery(this.mob, 20,
+                    "Helicopter flight tick={} phase={} target={} desired={} aim={} cruise={} stopAtDestination={} retreating={} closing={} stableFire={} fixedWeaponReady={} fixedWeaponAimed={} attackActive={} attackRecover={} targetH={} altitude={} pitch={} roll={} yaw={} hover={} power={} los={} frontBlocked={} elevatedFrontClear={} terrainY={} clearances=[front={},elevated={}] pressure={} airFirePressure={} threat={} input={}",
+                    this.mob.tickCount,
+                    plan.phase(),
+                    target == null ? -1 : target.getId(),
+                    plan.desiredPosition(),
+                    plan.aimPoint(),
+                    plan.cruiseSpeed(),
+                    plan.stopAtDestination(),
+                    retreating,
+                    closing,
+                    stableFire,
+                    fixedWeaponReady,
+                    fixedWeaponAimed,
+                    this.helicopterFixedAttackActive,
+                    this.helicopterFixedAttackRecoveryTicks,
+                    targetHorizontalDistance,
+                    aircraftState.altitude(),
+                    aircraftState.pitch(),
+                    aircraftState.roll(),
+                    aircraftState.yaw(),
+                    aircraftState.hoverMode(),
+                    aircraftState.power(),
+                    environment.hasLineOfSight(),
+                    environment.frontBlocked(),
+                    environment.elevatedFrontClear(),
+                    environment.terrainPreferredY(),
+                    environment.frontClearance(),
+                    environment.elevatedFrontClearance(),
+                    pressure == null ? -1 : pressure.getId(),
+                    airFirePressure == null ? -1 : airFirePressure.getId(),
+                    threat == null ? null : threat.stage(),
+                    input);
+        }
         controller.controlFlight(this.mob, input);
     }
 

@@ -5,59 +5,71 @@ import net.minecraft.world.entity.Mob;
 import net.minecraft.world.level.Level;
 
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.Map;
 import java.util.UUID;
+import java.util.WeakHashMap;
 
 public class VehicleClaimManager {
     private static final long CLAIM_TTL = 80L;
-    private static final Map<Key, Claim> CLAIMS = new HashMap<>();
+    private static final Map<Level, Map<Key, Claim>> LEVELS = new WeakHashMap<>();
 
     public static boolean claim(Mob mob, Entity vehicle, int seatId) {
-        cleanup(mob.level());
+        Map<Key, Claim> claims = LEVELS.computeIfAbsent(mob.level(), key -> new HashMap<>());
         Key key = new Key(vehicle.getUUID(), seatId);
-        Claim existing = CLAIMS.get(key);
+        Claim existing = claims.get(key);
         long now = mob.level().getGameTime();
         if (existing != null && existing.expiresAt >= now && !existing.owner.equals(mob.getUUID())) {
             return false;
         }
 
-        CLAIMS.put(key, new Claim(mob.getUUID(), now + CLAIM_TTL));
+        claims.put(key, new Claim(mob.getUUID(), now + CLAIM_TTL));
         return true;
     }
 
     public static boolean isClaimedByOther(Mob mob, Entity vehicle, int seatId) {
-        cleanup(mob.level());
-        Claim claim = CLAIMS.get(new Key(vehicle.getUUID(), seatId));
+        Map<Key, Claim> claims = LEVELS.get(mob.level());
+        if (claims == null) return false;
+        Key key = new Key(vehicle.getUUID(), seatId);
+        Claim claim = claims.get(key);
+        if (claim != null && claim.expiresAt < mob.level().getGameTime()) {
+            claims.remove(key);
+            return false;
+        }
         return claim != null && !claim.owner.equals(mob.getUUID());
     }
 
     public static void release(Mob mob, Entity vehicle, int seatId) {
         Key key = new Key(vehicle.getUUID(), seatId);
-        Claim claim = CLAIMS.get(key);
+        Map<Key, Claim> claims = LEVELS.get(mob.level());
+        if (claims == null) return;
+        Claim claim = claims.get(key);
         if (claim != null && claim.owner.equals(mob.getUUID())) {
-            CLAIMS.remove(key);
+            claims.remove(key);
         }
     }
 
     public static void releaseAll(Mob mob) {
         UUID owner = mob.getUUID();
-        CLAIMS.entrySet().removeIf(entry -> entry.getValue().owner.equals(owner));
+        Map<Key, Claim> claims = LEVELS.get(mob.level());
+        if (claims != null) claims.values().removeIf(claim -> claim.owner.equals(owner));
     }
 
     public static void releaseVehicle(Entity vehicle) {
         UUID vehicleId = vehicle.getUUID();
-        CLAIMS.entrySet().removeIf(entry -> entry.getKey().vehicle.equals(vehicleId));
+        Map<Key, Claim> claims = LEVELS.get(vehicle.level());
+        if (claims != null) claims.keySet().removeIf(key -> key.vehicle.equals(vehicleId));
     }
 
-    private static void cleanup(Level level) {
+    public static void expire(Level level) {
+        Map<Key, Claim> claims = LEVELS.get(level);
+        if (claims == null) return;
         long now = level.getGameTime();
-        Iterator<Map.Entry<Key, Claim>> iterator = CLAIMS.entrySet().iterator();
-        while (iterator.hasNext()) {
-            if (iterator.next().getValue().expiresAt < now) {
-                iterator.remove();
-            }
-        }
+        claims.values().removeIf(claim -> claim.expiresAt < now);
+        if (claims.isEmpty()) LEVELS.remove(level);
+    }
+
+    public static void clearLevel(Level level) {
+        LEVELS.remove(level);
     }
 
     private record Key(UUID vehicle, int seat) {

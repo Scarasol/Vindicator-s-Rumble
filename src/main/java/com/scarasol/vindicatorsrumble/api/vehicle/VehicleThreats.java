@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.WeakHashMap;
+import java.util.function.Predicate;
 
 /** Transient server-side reports shared by weapon and vehicle adapters. */
 public final class VehicleThreats {
@@ -44,6 +45,10 @@ public final class VehicleThreats {
     }
 
     public static Optional<Threat> strongest(Entity target) {
+        return strongest(target, threat -> true);
+    }
+
+    public static Optional<Threat> strongest(Entity target, Predicate<Threat> filter) {
         if (!(target.level() instanceof ServerLevel level)) return Optional.empty();
         Reports reports = LEVELS.get(level);
         Map<UUID, Threat> sources = reports == null ? null
@@ -56,9 +61,9 @@ public final class VehicleThreats {
             if (!fresh(level, threat)) {
                 iterator.remove();
                 reports.targets.remove(entry.getKey());
-            } else if (strongest == null || threat.stage().ordinal() > strongest.stage().ordinal()
+            } else if (filter.test(threat) && (strongest == null || threat.stage().ordinal() > strongest.stage().ordinal()
                     || threat.stage() == strongest.stage()
-                    && threat.source().distanceToSqr(target) < strongest.source().distanceToSqr(target)) {
+                    && threat.source().distanceToSqr(target) < strongest.source().distanceToSqr(target))) {
                 strongest = threat;
             }
         }

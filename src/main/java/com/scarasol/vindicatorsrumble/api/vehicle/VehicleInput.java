@@ -1,5 +1,9 @@
 package com.scarasol.vindicatorsrumble.api.vehicle;
 
+/**
+ * Ground steering follows the requested gear: left/right request negative/positive yaw
+ * unless back is set, which reverses that response. Adapters account for gear-change lag.
+ */
 public record VehicleInput(
         boolean forward,
         boolean back,

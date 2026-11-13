@@ -24,6 +24,10 @@ record GroundClearance(double front, double back, double left, double right) {
         return this.back < distance;
     }
 
+    boolean isOpen(double distance) {
+        return this.front >= distance && this.back >= distance && this.left >= distance && this.right >= distance;
+    }
+
     boolean prefersBack() {
         return this.back > this.front;
     }

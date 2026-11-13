@@ -96,9 +96,10 @@ public final class HelicopterFlightPlanner {
             this.visibilityRecovery.reset();
             recoveryWaypoint = null;
         } else if (needsVisibilityRecovery) {
+            double horizontalSpeed = state.velocity().horizontalDistance();
             if (recoveryWaypoint != null
-                    && HelicopterFlightControl.lacksObstacleStoppingRoom(
-                    environment, controller.velocity().multiply(1.0D, 0.0D, 1.0D).length())) {
+                    && horizontalSpeed > MOVEMENT_PASS_SPEED
+                    && HelicopterFlightControl.lacksObstacleStoppingRoom(environment, horizontalSpeed)) {
                 this.visibilityRecovery.invalidateCurrentRoute(state);
             }
             recoveryWaypoint = this.visibilityRecovery.update(
@@ -119,7 +120,9 @@ public final class HelicopterFlightPlanner {
             environment = aligned;
             plan = planSelector.apply(environment, recoveryWaypoint);
         }
-        this.hoverY = this.visibilityRecovery.recovering() ? state.position().y : plan.desiredPosition().y;
+        // Temporary obstacle/pass clearance must not become the ordinary hover reference.
+        this.hoverY = this.visibilityRecovery.recovering() || plan.phase() == Phase.PULL_OUT
+                ? state.position().y : plan.desiredPosition().y;
         return plan.withEnvironment(environment, target == null || target.getRootVehicle().onGround()
                 ? HelicopterFlightControl.DIVE_PASS_PITCH_BONUS : 0.0D);
     }
@@ -409,7 +412,7 @@ public final class HelicopterFlightPlanner {
                         this.clearRetreatRoute();
                         return standardCombatPositionPlan(state, targetCenter, desiredY, combatDistance);
                     }
-                    return retreatContinuationPlan(state, targetCenter, desiredY, combatDistance);
+                    return this.safeRetreatPlan(controller, state, targetCenter, desiredY, combatDistance);
                 }
 
                 Vec3 exitPoint = divePassExitPoint(
@@ -518,7 +521,9 @@ public final class HelicopterFlightPlanner {
             Vec3 destination = divePassExitPoint(targetCenter, direction, desiredY, combatDistance);
             if (this.visibilityRecovery.directDestinationClear(
                     controller, targetCenter, state.position(), destination)) {
-                return plan(destination, targetCenter, APPROACH_CRUISE_SPEED, true,
+                return angle == 0.0D
+                        ? retreatContinuationPlan(state, targetCenter, desiredY, combatDistance)
+                        : plan(destination, targetCenter, APPROACH_CRUISE_SPEED, true,
                         true, Phase.APPROACH);
             }
         }

@@ -3,9 +3,18 @@ package com.scarasol.vindicatorsrumble.util;
 import com.scarasol.vindicatorsrumble.VindicatorsRumbleMod;
 import com.scarasol.vindicatorsrumble.config.CommonConfig;
 import net.minecraft.world.entity.Entity;
+import org.slf4j.helpers.FormattingTuple;
+import org.slf4j.helpers.MessageFormatter;
+
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+import java.util.WeakHashMap;
 
 public class VehicleAiLogger {
     private static final String PREFIX = "[VehicleAI] ";
+    private static final int MAX_SAMPLED_MESSAGES_PER_TICK = 64;
+    private static final Map<Entity, SampledMessages> SAMPLED_MESSAGES = new WeakHashMap<>();
 
     private VehicleAiLogger() {
     }
@@ -41,12 +50,39 @@ public class VehicleAiLogger {
     }
 
     public static void debugEvery(Entity entity, int intervalTicks, String message, Object... args) {
-        if (!isDebugEnabled()) {
+        if (!shouldLog(entity, intervalTicks)) {
             return;
         }
-        if (entity != null && intervalTicks > 1 && entity.tickCount % intervalTicks != 0) {
+        if (entity == null) {
+            debug(message, args);
             return;
+        }
+        // Cache rendered text only: weak entity keys must not be retained through log arguments.
+        FormattingTuple formatted = MessageFormatter.arrayFormat(message, args);
+        if (formatted.getThrowable() == null) {
+            synchronized (SAMPLED_MESSAGES) {
+                SampledMessages sampled = SAMPLED_MESSAGES.get(entity);
+                if (sampled == null || sampled.tick() != entity.tickCount) {
+                    sampled = new SampledMessages(entity.tickCount, new HashSet<>());
+                    SAMPLED_MESSAGES.put(entity, sampled);
+                }
+                if (sampled.messages().contains(formatted.getMessage())) {
+                    return;
+                }
+                if (sampled.messages().size() < MAX_SAMPLED_MESSAGES_PER_TICK) {
+                    sampled.messages().add(formatted.getMessage());
+                }
+            }
         }
         debug(entity, message, args);
+    }
+
+    public static boolean shouldLog(Entity entity, int intervalTicks) {
+        return isDebugEnabled()
+                && (entity == null || intervalTicks <= 1
+                || Math.floorMod((long) entity.tickCount + entity.getId(), intervalTicks) == 0);
+    }
+
+    private record SampledMessages(int tick, Set<String> messages) {
     }
 }

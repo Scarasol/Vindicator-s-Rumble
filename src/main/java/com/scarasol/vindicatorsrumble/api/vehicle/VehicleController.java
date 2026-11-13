@@ -18,6 +18,21 @@ public interface VehicleController {
 
     AABB boundingBox();
 
+    /** Collision bounds relative to the vehicle origin in its yaw-aligned frame. */
+    default AABB localCollisionBounds() {
+        AABB box = this.boundingBox();
+        Vec3 offset = box.getCenter().subtract(this.position());
+        double radians = Math.toRadians(this.yaw());
+        double cos = Math.cos(radians);
+        double sin = Math.sin(radians);
+        double x = offset.x * cos + offset.z * sin;
+        double z = -offset.x * sin + offset.z * cos;
+        double halfWidth = (Math.abs(cos) * box.getXsize() + Math.abs(sin) * box.getZsize()) * 0.5D;
+        double halfLength = (Math.abs(sin) * box.getXsize() + Math.abs(cos) * box.getZsize()) * 0.5D;
+        return new AABB(x - halfWidth, box.minY - this.position().y, z - halfLength,
+                x + halfWidth, box.maxY - this.position().y, z + halfLength);
+    }
+
     /** Horizontal footprint radius about the vehicle origin, independent of yaw when available. */
     default double horizontalFootprintRadius() {
         return this.pathingDimensions().conservativeHorizontalSize() * 0.5D;
@@ -65,6 +80,19 @@ public interface VehicleController {
 
     /** Unsupported, empty or unavailable countermeasures must return false. */
     default boolean canDeployDecoy() {
+        return false;
+    }
+
+    default boolean supportsSmoke() {
+        return false;
+    }
+
+    default boolean canDeploySmoke() {
+        return false;
+    }
+
+    /** Whether smoke can redirect this incoming entity's actual guidance. */
+    default boolean isSmokeEffectiveAgainst(Entity source) {
         return false;
     }
 

@@ -15,9 +15,13 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
+import java.util.WeakHashMap;
 
 final class HelicopterVisibilityRecovery {
     private static final int ACTION_FORWARD = 0;
@@ -32,6 +36,9 @@ final class HelicopterVisibilityRecovery {
     private static final int MAX_DEPTH = 6;
     private static final int SAFE_PREFIX_LENGTH = 2;
     private static final int MAX_TRAIL_POINTS = 16;
+    private static final int FAILED_SEARCH_RETRY_TICKS = 20;
+    private static final int MAX_SEARCHES_PER_LEVEL_TICK = 8;
+    private static final Map<Level, SearchBudget> SEARCH_BUDGETS = new WeakHashMap<>();
     private static final double SEGMENT_LENGTH = 11.0D;
     private static final double CLIMB_FORWARD_LENGTH = 5.0D;
     private static final double CLIMB_HEIGHT = 7.0D;
@@ -93,6 +100,9 @@ final class HelicopterVisibilityRecovery {
     private double maxClimbProgress;
     private long rejectedLegOrigin = NO_REJECTED_LEG;
     private long rejectedLegDestination = NO_REJECTED_LEG;
+    private long nextSearchTick = Long.MIN_VALUE;
+    private Vec3 failedSearchPosition;
+    private Vec3 failedSearchTarget;
 
     void reset() {
         this.route.clear();
@@ -111,6 +121,9 @@ final class HelicopterVisibilityRecovery {
         this.maxClimbProgress = 0.0D;
         this.rejectedLegOrigin = NO_REJECTED_LEG;
         this.rejectedLegDestination = NO_REJECTED_LEG;
+        this.nextSearchTick = Long.MIN_VALUE;
+        this.failedSearchPosition = null;
+        this.failedSearchTarget = null;
     }
 
     void invalidateCurrentRoute(HelicopterFlightPlanner.AircraftState state) {
@@ -154,12 +167,63 @@ final class HelicopterVisibilityRecovery {
             return currentWaypoint;
         }
 
-        List<Vec3> planned = this.search(controller, target, state, followRange);
+        long now = controller.level().getGameTime();
+        if (now < this.nextSearchTick && this.failedSearchPosition != null
+                && state.position().distanceToSqr(this.failedSearchPosition) < 4.0D
+                && target.position().distanceToSqr(this.failedSearchTarget) < 4.0D) {
+            return null;
+        }
+        if (!SEARCH_BUDGETS.computeIfAbsent(controller.level(), key -> new SearchBudget())
+                .acquire(controller.entity().getUUID(), now)) {
+            return null;
+        }
+        double minimumY = HelicopterFlightPlanner.recoveryFloorY(controller, state, target)
+                + HelicopterFlightPlanner.VERTICAL_TOLERANCE;
+        List<Vec3> planned = this.search(controller, target, state, followRange, minimumY);
         if (!planned.isEmpty()) {
+            this.failedSearchPosition = null;
+            this.failedSearchTarget = null;
             this.route.addAll(planned);
             return this.takeNextWaypoint(state);
         }
-        return this.beginBacktrack(state);
+        this.nextSearchTick = now + FAILED_SEARCH_RETRY_TICKS + Math.floorMod(controller.entity().getId(), 5);
+        this.failedSearchPosition = state.position();
+        this.failedSearchTarget = target.position();
+        if (controller.estimatedHorizontalStoppingDistance() > MIN_FOLLOW_RANGE_MARGIN) {
+            return null;
+        }
+        return this.beginBacktrack(state, minimumY);
+    }
+
+    private static final class SearchBudget {
+        private final LinkedHashMap<UUID, Long> waiting = new LinkedHashMap<>();
+        private long tick = Long.MIN_VALUE;
+        private int searches;
+
+        boolean acquire(UUID vehicle, long now) {
+            if (now != this.tick) {
+                if (now < this.tick) this.waiting.clear();
+                this.tick = now;
+                this.searches = 0;
+            }
+            // Preserve queue order so entity tick order cannot monopolize the shared budget.
+            this.waiting.put(vehicle, now);
+            var iterator = this.waiting.entrySet().iterator();
+            while (iterator.hasNext()) {
+                var first = iterator.next();
+                if (first.getValue() < now - 2L) {
+                    iterator.remove();
+                    continue;
+                }
+                if (this.searches >= MAX_SEARCHES_PER_LEVEL_TICK || !first.getKey().equals(vehicle)) {
+                    return false;
+                }
+                iterator.remove();
+                this.searches++;
+                return true;
+            }
+            return false;
+        }
     }
 
     @Nullable
@@ -181,7 +245,7 @@ final class HelicopterVisibilityRecovery {
     }
 
     private List<Vec3> search(VehicleController controller, Entity target,
-                              HelicopterFlightPlanner.AircraftState state, double followRange) {
+                              HelicopterFlightPlanner.AircraftState state, double followRange, double minimumY) {
         Level level = controller.level();
         Entity vehicle = controller.entity();
         if (level == null || vehicle == null || this.episodeOrigin == null
@@ -212,8 +276,8 @@ final class HelicopterVisibilityRecovery {
         double currentDeficit = this.corridorMetrics[HelicopterHeightField.DEFICIT];
         double currentBlockedLength = this.corridorMetrics[HelicopterHeightField.BLOCKED_LENGTH];
         List<HelicopterRecoveryCandidate> beam = List.of(new HelicopterRecoveryCandidate(
-                state.position(), rootHeading, List.of(), LANE_CENTER, false,
-                0.0D, 0.0D, currentDeficit, currentBlockedLength));
+                state.position(), rootHeading, null, LANE_CENTER, false,
+                0.0D, 0.0D));
         HelicopterRecoveryCandidate bestPartial = null;
 
         for (int depth = 0; depth < MAX_DEPTH; depth++) {
@@ -222,7 +286,7 @@ final class HelicopterVisibilityRecovery {
                 for (int action = 0; action < ACTION_COUNT; action++) {
                     HelicopterRecoveryCandidate next = this.advance(
                             level, bottomOffset, halfWidth, candidate, action,
-                            targetCenter, maxTargetRange, followRange, inertiaPoint);
+                            targetCenter, maxTargetRange, followRange, inertiaPoint, minimumY);
                     if (next != null) {
                         expanded.add(next);
                     }
@@ -235,30 +299,29 @@ final class HelicopterVisibilityRecovery {
             for (HelicopterRecoveryCandidate candidate : expanded) {
                 Vec3 sightStart = candidate.position().add(centerOffset);
                 if (this.candidateHasLineOfSight(level, vehicle, sightStart, targetCenter)) {
-                    return candidate.path();
+                    return candidate.path(MAX_DEPTH);
                 }
             }
             beam = this.retainDiversity(expanded);
             HelicopterRecoveryCandidate depthPartial = this.selectPartialCandidate(
-                    beam, targetCenter, maxTargetRange, currentDeficit,
-                    currentBlockedLength);
+                    level, beam, targetCenter, bottomOffset, halfWidth, maxTargetRange,
+                    currentDeficit, currentBlockedLength);
             if (depthPartial != null) {
                 bestPartial = depthPartial;
             }
         }
 
-        if (bestPartial == null || bestPartial.path().isEmpty()) {
+        if (bestPartial == null || bestPartial.parent() == null) {
             return List.of();
         }
-        int prefixLength = Math.min(SAFE_PREFIX_LENGTH, bestPartial.path().size());
-        return List.copyOf(bestPartial.path().subList(0, prefixLength));
+        return bestPartial.path(SAFE_PREFIX_LENGTH);
     }
 
     @Nullable
     private HelicopterRecoveryCandidate advance(Level level, double bottomOffset, double halfWidth,
                                                  HelicopterRecoveryCandidate candidate, int action,
                                                  Vec3 targetCenter, double maxTargetRange,
-                                                 double followRange, Vec3 inertiaPoint) {
+                                                 double followRange, Vec3 inertiaPoint, double minimumY) {
         Vec3 nextHeading = candidate.heading();
         Vec3 movement;
         double actionCost;
@@ -280,8 +343,16 @@ final class HelicopterVisibilityRecovery {
             actionCost = FORWARD_TRAVEL_COST;
         }
         Vec3 nextPosition = candidate.position().add(movement);
+        if (nextPosition.y < minimumY) {
+            nextPosition = new Vec3(nextPosition.x, minimumY, nextPosition.z);
+        }
+        if (action == ACTION_CLIMB && !this.heightField.corridorClear(
+                level, candidate.position(), nextPosition, bottomOffset, halfWidth)) {
+            // A wall can leave room to ascend but not to translate while climbing.
+            nextPosition = candidate.position().add(0.0D, CLIMB_HEIGHT, 0.0D);
+        }
         int nextLane = this.lane(nextPosition);
-        boolean firstLeg = candidate.path().isEmpty();
+        boolean firstLeg = candidate.parent() == null;
         if (candidate.lane() != LANE_CENTER && nextLane == -candidate.lane()
                 || !withinRangeEnvelope(candidate.position(), nextPosition, targetCenter,
                 maxTargetRange, followRange)
@@ -298,21 +369,14 @@ final class HelicopterVisibilityRecovery {
             return null;
         }
 
-        List<Vec3> path = new ArrayList<>(candidate.path().size() + 1);
-        path.addAll(candidate.path());
-        path.add(nextPosition);
         double travelCost = candidate.travelCost() + actionCost;
         double targetCorridorClearance = this.targetCorridorClearance(
                 level, nextPosition, targetCenter, nextHeading, bottomOffset, halfWidth);
         double score = this.score(nextPosition, nextHeading, targetCenter,
                 travelCost, action, targetCorridorClearance, maxTargetRange);
-        this.heightField.corridorMetrics(level, nextPosition, targetCenter,
-                bottomOffset, halfWidth, TARGET_CORRIDOR_CLEARANCE, this.corridorMetrics);
-        double corridorDeficit = this.corridorMetrics[HelicopterHeightField.DEFICIT];
-        double blockedLength = this.corridorMetrics[HelicopterHeightField.BLOCKED_LENGTH];
         return new HelicopterRecoveryCandidate(
-                nextPosition, nextHeading, List.copyOf(path), nextLane, climbed,
-                travelCost, score, corridorDeficit, blockedLength);
+                nextPosition, nextHeading, candidate, nextLane, climbed,
+                travelCost, score);
     }
 
     private List<HelicopterRecoveryCandidate> retainDiversity(
@@ -354,20 +418,33 @@ final class HelicopterVisibilityRecovery {
 
     @Nullable
     private HelicopterRecoveryCandidate selectPartialCandidate(
-            List<HelicopterRecoveryCandidate> candidates, Vec3 targetCenter,
-            double maxTargetRange, double currentDeficit,
+            Level level, List<HelicopterRecoveryCandidate> candidates, Vec3 targetCenter,
+            double bottomOffset, double halfWidth, double maxTargetRange, double currentDeficit,
             double currentBlockedLength) {
-        return candidates.stream()
-                .filter(candidate -> this.expandsFrontier(
-                        candidate, currentDeficit, currentBlockedLength))
-                .min(Comparator.comparingDouble(
-                        candidate -> this.partialCandidateScore(
-                                candidate, targetCenter, maxTargetRange,
-                                currentDeficit, currentBlockedLength)))
-                .orElse(null);
+        HelicopterRecoveryCandidate best = null;
+        double bestScore = Double.POSITIVE_INFINITY;
+        // Full target corridors only rank partial frontiers, not complete routes or beam diversity.
+        for (HelicopterRecoveryCandidate candidate : candidates) {
+            this.heightField.corridorMetrics(level, candidate.position(), targetCenter,
+                    bottomOffset, halfWidth, TARGET_CORRIDOR_CLEARANCE, this.corridorMetrics);
+            double corridorDeficit = this.corridorMetrics[HelicopterHeightField.DEFICIT];
+            double blockedLength = this.corridorMetrics[HelicopterHeightField.BLOCKED_LENGTH];
+            if (!this.expandsFrontier(candidate, corridorDeficit, blockedLength,
+                    currentDeficit, currentBlockedLength)) {
+                continue;
+            }
+            double score = this.partialCandidateScore(candidate, targetCenter, maxTargetRange,
+                    corridorDeficit, blockedLength, currentDeficit, currentBlockedLength);
+            if (best == null || Double.compare(score, bestScore) < 0) {
+                best = candidate;
+                bestScore = score;
+            }
+        }
+        return best;
     }
 
     private boolean expandsFrontier(HelicopterRecoveryCandidate candidate,
+                                    double corridorDeficit, double blockedLength,
                                     double currentDeficit,
                                     double currentBlockedLength) {
         double lateral = this.lateralCoordinate(candidate.position());
@@ -375,11 +452,11 @@ final class HelicopterVisibilityRecovery {
                 && -lateral >= this.maxLeftProgress + MIN_FRONTIER_PROGRESS
                 || candidate.lane() == LANE_RIGHT
                 && lateral >= this.maxRightProgress + MIN_FRONTIER_PROGRESS;
-        double flyoverGain = currentDeficit - candidate.corridorDeficit();
-        double blockedProgress = currentBlockedLength - candidate.blockedLength();
+        double flyoverGain = currentDeficit - corridorDeficit;
+        double blockedProgress = currentBlockedLength - blockedLength;
         double forward = Math.max(0.0D, this.forwardProgress(candidate.position()));
-        boolean highEnough = candidate.corridorDeficit() <= CLEAR_CORRIDOR_DEFICIT;
-        boolean corridorOpen = highEnough && candidate.blockedLength() <= CLEAR_BLOCKED_LENGTH;
+        boolean highEnough = corridorDeficit <= CLEAR_CORRIDOR_DEFICIT;
+        boolean corridorOpen = highEnough && blockedLength <= CLEAR_BLOCKED_LENGTH;
         boolean expandsFlyover = currentDeficit > CLEAR_CORRIDOR_DEFICIT
                 && flyoverGain >= MIN_DEFICIT_PROGRESS
                 || blockedProgress >= MIN_BLOCKED_PROGRESS
@@ -389,17 +466,18 @@ final class HelicopterVisibilityRecovery {
 
     private double partialCandidateScore(HelicopterRecoveryCandidate candidate,
                                          Vec3 targetCenter, double maxTargetRange,
+                                         double corridorDeficit, double blockedLength,
                                          double currentDeficit,
                                          double currentBlockedLength) {
         double sideProgress = this.lateralProgress(candidate);
         double forwardProgress = Math.max(0.0D, this.forwardProgress(candidate.position()));
         double flyoverProgress = this.flyoverProgress(candidate);
-        double flyoverGain = Math.max(0.0D, currentDeficit - candidate.corridorDeficit());
-        double blockedProgress = Math.max(0.0D, currentBlockedLength - candidate.blockedLength());
+        double flyoverGain = Math.max(0.0D, currentDeficit - corridorDeficit);
+        double blockedProgress = Math.max(0.0D, currentBlockedLength - blockedLength);
         double climbProgress = Math.max(0.0D,
                 candidate.position().y - this.episodeOrigin.y - this.maxClimbProgress);
-        double clearForward = candidate.corridorDeficit() <= CLEAR_CORRIDOR_DEFICIT
-                && candidate.blockedLength() <= CLEAR_BLOCKED_LENGTH
+        double clearForward = corridorDeficit <= CLEAR_CORRIDOR_DEFICIT
+                && blockedLength <= CLEAR_BLOCKED_LENGTH
                 ? forwardProgress : 0.0D;
         double targetDistance = horizontalDistance(candidate.position(), targetCenter);
         double rangeRatio = maxTargetRange <= 1.0D ? 0.0D : targetDistance / maxTargetRange;
@@ -546,13 +624,15 @@ final class HelicopterVisibilityRecovery {
     }
 
     @Nullable
-    private Vec3 beginBacktrack(HelicopterFlightPlanner.AircraftState state) {
+    private Vec3 beginBacktrack(HelicopterFlightPlanner.AircraftState state, double minimumY) {
         if (this.trail.size() <= 1) {
             return null;
         }
         this.trail.removeLast();
         this.waypointStart = state.position();
-        this.waypoint = this.trail.peekLast();
+        Vec3 previous = this.trail.peekLast();
+        this.waypoint = new Vec3(previous.x,
+                Math.max(minimumY, Math.max(previous.y, state.position().y)), previous.z);
         this.backtracking = true;
         this.resetWaypointProgress();
         return this.waypoint;

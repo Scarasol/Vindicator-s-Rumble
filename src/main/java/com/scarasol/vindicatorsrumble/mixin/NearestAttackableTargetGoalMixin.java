@@ -1,6 +1,7 @@
 package com.scarasol.vindicatorsrumble.mixin;
 
 import com.scarasol.vindicatorsrumble.compat.VehicleControllers;
+import com.scarasol.vindicatorsrumble.config.CommonConfig;
 import com.scarasol.vindicatorsrumble.init.ModTags;
 import com.scarasol.vindicatorsrumble.util.VehicleTargetRangeManager;
 import com.scarasol.vindicatorsrumble.util.VehicleAiTuning;
@@ -41,7 +42,9 @@ public abstract class NearestAttackableTargetGoalMixin<T extends LivingEntity> e
 
     @Inject(method = "findTarget", at = @At("HEAD"))
     private void vindicatorsRumble$refreshFollowRangeSnapshot(CallbackInfo ci) {
-        this.targetConditions = this.targetConditions.range(this.getFollowDistance());
+        if (this.mob.getType().is(ModTags.EntityTypes.VEHICLE_AI_USERS)) {
+            this.targetConditions = this.targetConditions.range(this.getFollowDistance());
+        }
     }
 
     @Inject(method = "getTargetSearchArea", at = @At("RETURN"), cancellable = true)
@@ -53,7 +56,8 @@ public abstract class NearestAttackableTargetGoalMixin<T extends LivingEntity> e
     }
 
     private boolean vindicatorsRumble$shouldHandleVehicleTargeting() {
-        return this.mob.isPassenger() && this.mob.getType().is(ModTags.EntityTypes.VEHICLE_AI_USERS);
+        return CommonConfig.ENABLE_VEHICLE_AI.get() && this.mob.isPassenger()
+                && this.mob.getType().is(ModTags.EntityTypes.VEHICLE_AI_USERS);
     }
 
     private boolean vindicatorsRumble$isFlightVehiclePassenger() {

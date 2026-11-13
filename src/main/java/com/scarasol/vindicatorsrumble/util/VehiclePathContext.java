@@ -10,8 +10,12 @@ public class VehiclePathContext {
     private static final ThreadLocal<Entry> CURRENT = new ThreadLocal<>();
 
     public static Scope push(Mob mob, VehicleDimensions dimensions) {
+        return push(mob, dimensions, false);
+    }
+
+    public static Scope push(Mob mob, VehicleDimensions dimensions, boolean narrow) {
         Entry previous = CURRENT.get();
-        CURRENT.set(new Entry(mob.getUUID(), dimensions));
+        CURRENT.set(new Entry(mob.getUUID(), dimensions, narrow));
         return new Scope(previous);
     }
 
@@ -23,7 +27,12 @@ public class VehiclePathContext {
         return Optional.of(entry.dimensions);
     }
 
-    private record Entry(UUID mobId, VehicleDimensions dimensions) {
+    public static boolean isNarrowFor(Mob mob) {
+        Entry entry = CURRENT.get();
+        return entry != null && entry.mobId.equals(mob.getUUID()) && entry.narrow;
+    }
+
+    private record Entry(UUID mobId, VehicleDimensions dimensions, boolean narrow) {
     }
 
     public static class Scope implements AutoCloseable {

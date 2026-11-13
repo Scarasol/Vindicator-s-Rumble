@@ -113,6 +113,20 @@ minecraft {
         gameTestServer {
             workingDirectory gameTestDirectory.get().asFile
             property 'forge.enabledGameTestNamespaces', providers.gradleProperty('gameTestNamespaces').getOrElse(mod_id)
+            if (project.hasProperty('helicopterProfile')) {
+                def profileMode = providers.gradleProperty('helicopterProfile').get()
+                property 'vindicatorsrumble.helicopterProfile', profileMode
+                args '--mixin', profileMode == 'light'
+                        ? 'vindicators_rumble.gametest-timing.mixins.json'
+                        : 'vindicators_rumble.gametest-profile.mixins.json'
+            }
+            if (project.hasProperty('helicopterProbeProfile')) {
+                property 'vindicatorsrumble.helicopterProbeProfile', 'true'
+                args '--mixin', 'vindicators_rumble.gametest-probes.mixins.json'
+            }
+            if (project.hasProperty('helicopterPlanTrace')) {
+                args '--mixin', 'vindicators_rumble.gametest-plans.mixins.json'
+            }
             mods {
                 "${mod_id}" {
                     source sourceSets.gameTest
@@ -148,6 +162,10 @@ def prepareGameTestWorld = tasks.register('prepareIsolatedGameTestWorld') {
         properties.setProperty('allow-flight', 'true')
         new File(directory, 'server.properties').withOutputStream { output ->
             properties.store(output, 'Isolated GameTest world')
+        }
+        copy {
+            from 'src/gametest/config'
+            into new File(directory, 'config')
         }
     }
 }
@@ -245,6 +263,7 @@ mixin {
 // When "copyIdeResources" is enabled, this will also run before the game launches in IDE environments.
 // See https://docs.gradle.org/current/dsl/org.gradle.language.jvm.tasks.ProcessResources.html
 tasks.named('processResources', ProcessResources).configure {
+    filteringCharset = 'UTF-8'
     var replaceProperties = [
             minecraft_version: minecraft_version, minecraft_version_range: minecraft_version_range,
             forge_version: forge_version, forge_version_range: forge_version_range,

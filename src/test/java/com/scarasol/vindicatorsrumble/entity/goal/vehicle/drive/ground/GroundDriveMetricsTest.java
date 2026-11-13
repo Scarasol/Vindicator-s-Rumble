@@ -39,18 +39,19 @@ class GroundDriveMetricsTest {
     }
 
     @Test
-    void randomizedManeuverContractsPreferLargerForeAftClearance() throws IOException {
+    void randomizedManeuverContractsBackOutOfNarrowFrontButKeepClearFrontMoving() throws IOException {
         Random random = new Random(0x6A0DCAFE);
         StringBuilder failures = new StringBuilder();
         StringBuilder report = new StringBuilder("ground-maneuver-contracts\n");
         int rearDominant = 0;
+        int clearFront = 0;
         int frontDominant = 0;
         int braking = 0;
         int backStraightTransitions = 0;
         int backTurnTransitions = 0;
 
         for (int i = 0; i < MANEUVER_CASES; i++) {
-            double front = randomRange(random, 0.2D, 5.4D);
+            double front = randomRange(random, 0.2D, 2.0D);
             double back = front + randomRange(random, 0.05D, 4.5D);
             GroundClearance clearance = new GroundClearance(front, back, randomRange(random, 0.4D, 7.0D), randomRange(random, 0.4D, 7.0D));
             GroundManeuverStep initial = GroundDriveStrategy.selectInitialManeuverStep(clearance, false);
@@ -62,6 +63,18 @@ class GroundDriveMetricsTest {
                 rearDominant++;
             } else {
                 appendManeuverFailure(failures, "rear-dominant", i, clearance, initial, preferredStraight, preferredTurn);
+            }
+        }
+
+        for (int i = 0; i < MANEUVER_CASES; i++) {
+            double front = randomRange(random, 3.0D, 7.0D);
+            GroundClearance clearance = new GroundClearance(front, front + randomRange(random, 0.05D, 1.0D),
+                    randomRange(random, 0.4D, 7.0D), randomRange(random, 0.4D, 7.0D));
+            GroundManeuverStep initial = GroundDriveStrategy.selectInitialManeuverStep(clearance, false);
+            if (initial == GroundManeuverStep.SWING_FORWARD) {
+                clearFront++;
+            } else {
+                appendManeuverFailure(failures, "clear-front", i, clearance, initial, null, null);
             }
         }
 
@@ -117,6 +130,7 @@ class GroundDriveMetricsTest {
         }
 
         report.append("rearDominant=").append(rearDominant).append('/').append(MANEUVER_CASES).append('\n');
+        report.append("clearFront=").append(clearFront).append('/').append(MANEUVER_CASES).append('\n');
         report.append("frontDominant=").append(frontDominant).append('/').append(MANEUVER_CASES).append('\n');
         report.append("braking=").append(braking).append('/').append(MANEUVER_CASES).append('\n');
         report.append("backStraightTransitions=").append(backStraightTransitions).append('/').append(MANEUVER_CASES).append('\n');

@@ -4,6 +4,7 @@ import com.scarasol.vindicatorsrumble.api.vehicle.DriveRequest;
 import com.scarasol.vindicatorsrumble.api.vehicle.VehicleController;
 import com.scarasol.vindicatorsrumble.compat.VehicleControllers;
 import com.scarasol.vindicatorsrumble.config.CommonConfig;
+import com.scarasol.vindicatorsrumble.init.ModTags;
 import com.scarasol.vindicatorsrumble.util.VehicleAiLogger;
 import com.scarasol.vindicatorsrumble.util.VehicleAiMemory;
 import com.scarasol.vindicatorsrumble.util.VehicleAiTuning;
@@ -40,17 +41,20 @@ public abstract class PathNavigationMixin {
     private void vindicatorsRumble$pushVehiclePathDimensions(Set<BlockPos> targets, int regionOffset, boolean offsetUpward, int accuracy, float followRange, CallbackInfoReturnable<Path> cir) {
         if (this.vindicatorsRumble$shouldBlockExternalPathCreation(targets)) {
             VehicleAiMemory.clearNavigationDriveRequest(this.mob);
-            VehicleAiLogger.debugEvery(this.mob, 20,
-                    "Blocked external vehicle path creation targets={} minDistance={} flight={} combatTarget={}",
-                    targets.size(),
-                    CommonConfig.VEHICLE_NAVIGATION_MIN_DISTANCE.get(),
-                    this.vindicatorsRumble$vehicleController().map(VehicleController::supportsFlightControl).orElse(false),
-                    this.vindicatorsRumble$hasCombatTarget());
+            if (VehicleAiLogger.shouldLog(this.mob, 20)) {
+                VehicleAiLogger.debugEvery(this.mob, 20,
+                        "Blocked external vehicle path creation targets={} minDistance={} flight={} combatTarget={}",
+                        targets.size(),
+                        CommonConfig.VEHICLE_NAVIGATION_MIN_DISTANCE.get(),
+                        this.vindicatorsRumble$vehicleController().map(VehicleController::supportsFlightControl).orElse(false),
+                        this.vindicatorsRumble$hasCombatTarget());
+            }
             cir.setReturnValue(null);
             return;
         }
         this.vindicatorsRumble$drivingController().ifPresent(controller ->
-                this.vindicatorsRumble$vehiclePathScope = VehiclePathContext.push(this.mob, controller.pathingDimensions()));
+                this.vindicatorsRumble$vehiclePathScope = VehiclePathContext.push(this.mob,
+                        controller.pathingDimensions(), VehiclePathContext.isNarrowFor(this.mob)));
     }
 
     @Inject(method = "createPath(Ljava/util/Set;IZIF)Lnet/minecraft/world/level/pathfinder/Path;", at = @At("RETURN"))
@@ -112,39 +116,45 @@ public abstract class PathNavigationMixin {
         Vec3 target = Vec3.atBottomCenterOf(path.getTarget());
         if (this.vindicatorsRumble$isShortGroundNavigation(controller, target)) {
             VehicleAiMemory.clearNavigationDriveRequest(this.mob);
-            VehicleAiLogger.debugEvery(this.mob, 20,
-                    "Blocked short vehicle path moveTo target={} horizontalDistance={} minDistance={} nodes={} speed={}",
-                    path.getTarget(),
-                    Math.sqrt(this.vindicatorsRumble$horizontalDistanceSqr(controller.position(), target)),
-                    CommonConfig.VEHICLE_NAVIGATION_MIN_DISTANCE.get(),
-                    path.getNodeCount(),
-                    speedModifier);
+            if (VehicleAiLogger.shouldLog(this.mob, 20)) {
+                VehicleAiLogger.debugEvery(this.mob, 20,
+                        "Blocked short vehicle path moveTo target={} horizontalDistance={} minDistance={} nodes={} speed={}",
+                        path.getTarget(),
+                        Math.sqrt(this.vindicatorsRumble$horizontalDistanceSqr(controller.position(), target)),
+                        CommonConfig.VEHICLE_NAVIGATION_MIN_DISTANCE.get(),
+                        path.getNodeCount(),
+                        speedModifier);
+            }
             cir.setReturnValue(false);
             return;
         }
         path.setNextNodeIndex(0);
         VehicleAiMemory.setNavigationDriveRequest(this.mob, DriveRequest.moveTo(target, path));
-        VehicleAiLogger.debug(this.mob,
-                "Captured vehicle navigation path target={} targetVec={} vehiclePos={} horizontalDistance={} nodes={} nextIndex={} firstNode={} nextNode={} lastNode={} speed={} dimensions={}",
-                path.getTarget(),
-                target,
-                controller.position(),
-                Math.sqrt(this.vindicatorsRumble$horizontalDistanceSqr(controller.position(), target)),
-                path.getNodeCount(),
-                path.getNextNodeIndex(),
-                this.vindicatorsRumble$nodeSummary(path, 0),
-                this.vindicatorsRumble$nextNodeSummary(path),
-                this.vindicatorsRumble$nodeSummary(path, path.getNodeCount() - 1),
-                speedModifier,
-                controller.pathingDimensions());
+        if (VehicleAiLogger.isDebugEnabled()) {
+            VehicleAiLogger.debug(this.mob,
+                    "Captured vehicle navigation path target={} targetVec={} vehiclePos={} horizontalDistance={} nodes={} nextIndex={} firstNode={} nextNode={} lastNode={} speed={} dimensions={}",
+                    path.getTarget(),
+                    target,
+                    controller.position(),
+                    Math.sqrt(this.vindicatorsRumble$horizontalDistanceSqr(controller.position(), target)),
+                    path.getNodeCount(),
+                    path.getNextNodeIndex(),
+                    this.vindicatorsRumble$nodeSummary(path, 0),
+                    this.vindicatorsRumble$nextNodeSummary(path),
+                    this.vindicatorsRumble$nodeSummary(path, path.getNodeCount() - 1),
+                    speedModifier,
+                    controller.pathingDimensions());
+        }
         cir.setReturnValue(true);
     }
 
     @Inject(method = "stop", at = @At("HEAD"))
     private void vindicatorsRumble$clearVehicleNavigation(CallbackInfo ci) {
-        if (this.mob.isPassenger()) {
+        if (this.mob.isPassenger()
+                && this.mob.getType().is(ModTags.EntityTypes.VEHICLE_AI_USERS)) {
             DriveRequest request = VehicleAiMemory.getNavigationDriveRequest(this.mob);
-            if (request.intent() != com.scarasol.vindicatorsrumble.api.vehicle.DriveIntent.NONE) {
+            if (VehicleAiLogger.isDebugEnabled()
+                    && request.intent() != com.scarasol.vindicatorsrumble.api.vehicle.DriveIntent.NONE) {
                 VehicleAiLogger.debug(this.mob,
                         "Clearing vehicle navigation request due PathNavigation.stop intent={} targetPos={} targetEntity={} pathNodes={}",
                         request.intent(),
@@ -158,7 +168,8 @@ public abstract class PathNavigationMixin {
 
     @Unique
     private Optional<VehicleController> vindicatorsRumble$vehicleController() {
-        if (!CommonConfig.ENABLE_VEHICLE_AI.get() || !this.mob.isPassenger()) {
+        if (!CommonConfig.ENABLE_VEHICLE_AI.get() || !this.mob.isPassenger()
+                || !this.mob.getType().is(ModTags.EntityTypes.VEHICLE_AI_USERS)) {
             return Optional.empty();
         }
         return VehicleControllers.forMob(this.mob).filter(VehicleController::isValid);
@@ -212,15 +223,17 @@ public abstract class PathNavigationMixin {
                 hasCombatTarget,
                 this.vindicatorsRumble$isShortGroundNavigation(controller, target))) {
             VehicleAiMemory.clearNavigationDriveRequest(this.mob);
-            String reason = hasCombatTarget ? "combat target" : "short request";
-            VehicleAiLogger.debugEvery(this.mob, 20,
-                    "Blocked external vehicle {} navigation reason={} target={} horizontalDistance={} minDistance={} speed={}",
-                    source,
-                    reason,
-                    target,
-                    Math.sqrt(this.vindicatorsRumble$horizontalDistanceSqr(controller.position(), target)),
-                    CommonConfig.VEHICLE_NAVIGATION_MIN_DISTANCE.get(),
-                    speedModifier);
+            if (VehicleAiLogger.shouldLog(this.mob, 20)) {
+                String reason = hasCombatTarget ? "combat target" : "short request";
+                VehicleAiLogger.debugEvery(this.mob, 20,
+                        "Blocked external vehicle {} navigation reason={} target={} horizontalDistance={} minDistance={} speed={}",
+                        source,
+                        reason,
+                        target,
+                        Math.sqrt(this.vindicatorsRumble$horizontalDistanceSqr(controller.position(), target)),
+                        CommonConfig.VEHICLE_NAVIGATION_MIN_DISTANCE.get(),
+                        speedModifier);
+            }
             cir.setReturnValue(false);
         }
     }

@@ -95,6 +95,69 @@ public final class RecruitsMovementGameTests {
         verifyGroundCruise(helper, "m_1a_2");
     }
 
+    @GameTest(batch = "recruits_movement", template = "empty", timeoutTicks = 400)
+    public static void pickupCommandThroughThreeWideSouth(GameTestHelper helper) { verifyNarrowCommand(helper, 0); }
+    @GameTest(batch = "recruits_movement", template = "empty", timeoutTicks = 400)
+    public static void pickupCommandThroughThreeWideWest(GameTestHelper helper) { verifyNarrowCommand(helper, 90); }
+    @GameTest(batch = "recruits_movement", template = "empty", timeoutTicks = 400)
+    public static void pickupCommandThroughThreeWideNorth(GameTestHelper helper) { verifyNarrowCommand(helper, 180); }
+    @GameTest(batch = "recruits_movement", template = "empty", timeoutTicks = 400)
+    public static void pickupCommandThroughThreeWideEast(GameTestHelper helper) { verifyNarrowCommand(helper, -90); }
+
+    private static void verifyNarrowCommand(GameTestHelper helper, float yaw) {
+        Fixture fixture = fixture(helper, "sodayo_pick_up_hmg", false, true);
+        fixture.vehicle.setYRot(yaw);
+        Vec3 start = fixture.vehicle.position();
+        double angle = Math.toRadians(yaw);
+        Vec3 forward = new Vec3(-Math.sin(angle), 0, Math.cos(angle));
+        Vec3 side = new Vec3(forward.z, 0, -forward.x);
+        Vec3 destination = start.add(forward.scale(32));
+        for (int z = -8; z <= 44; z++) {
+            for (int x : new int[]{-2, 2}) {
+                BlockPos wall = BlockPos.containing(start.add(forward.scale(z)).add(side.scale(x)));
+                for (int y = 0; y < 3; y++) fixture.level.setBlock(wall.above(y), Blocks.STONE_BRICKS.defaultBlockState(), 2);
+            }
+        }
+        long[] commandAt = {-1};
+        long[] arrivedAt = {-1};
+        int[] pause = {0};
+        int[] longestPause = {0};
+        helper.startSequence().thenWaitUntil(() -> {
+            helper.assertTrue(fixture.driver.tickCount > 0, "Narrow-road command fixture is not ticking");
+        }).thenExecute(() -> {
+            fixture.pointCommand(fixture.driver, destination);
+            commandAt[0] = helper.getTick();
+        });
+        helper.onEachTick(() -> {
+            if (commandAt[0] < 0) return;
+            try {
+                fixture.observe(helper);
+                long elapsed = helper.getTick() - commandAt[0];
+                helper.assertTrue(fixture.driver.getTarget() == null, "Navigation fixture acquired a combat target");
+                double distance = horizontalDistance(fixture.vehicle.position(), destination);
+                if (!fixture.driver.getShouldMovePos() && fixture.driver.getFollowState() == 2 && arrivedAt[0] < 0) {
+                    arrivedAt[0] = elapsed;
+                }
+                if (arrivedAt[0] < 0 && elapsed >= 40 && fixture.vehicle.getDeltaMovement().horizontalDistance() < 0.08D) {
+                    longestPause[0] = Math.max(longestPause[0], ++pause[0]);
+                } else {
+                    pause[0] = 0;
+                }
+                if (elapsed < 240) return;
+                LOGGER.info("Recruit narrow command yaw={} arrivedAt={} distance={} speed={} longestPause={}",
+                        yaw, arrivedAt[0], distance, fixture.vehicle.getDeltaMovement().horizontalDistance(), longestPause[0]);
+                helper.assertTrue(arrivedAt[0] >= 0 && distance <= 6, "Narrow-road point command did not arrive and stop");
+                helper.assertTrue(fixture.vehicle.getDeltaMovement().horizontalDistance() < 0.08D, "Narrow-road arrival did not stop");
+                helper.assertTrue(longestPause[0] <= 20, "Narrow-road command stalled: " + longestPause[0]);
+                fixture.close();
+                helper.succeed();
+            } catch (RuntimeException | Error failure) {
+                fixture.close();
+                throw failure;
+            }
+        });
+    }
+
     @GameTest(batch = "recruits_movement", template = "empty", timeoutTicks = 450)
     public static void pickupReachesShortSidewaysCommandWithoutCircling(GameTestHelper helper) {
         verifyGroundTurn(helper, "sodayo_pick_up_hmg", 90.0F, false);
@@ -118,6 +181,11 @@ public final class RecruitsMovementGameTests {
     @GameTest(batch = "recruits_movement", template = "empty", timeoutTicks = 450)
     public static void cruisingPickupReachesRedirectedSidewaysCommand(GameTestHelper helper) {
         verifyGroundTurn(helper, "sodayo_pick_up_hmg", 0.0F, true);
+    }
+
+    @GameTest(batch = "recruits_movement", template = "empty", timeoutTicks = 450)
+    public static void redirectedPickupDoesNotGrindInOpenSpace(GameTestHelper helper) {
+        verifyGroundTurn(helper, "sodayo_pick_up_hmg", 0.0F, true, false, true);
     }
 
     @GameTest(batch = "recruits_movement", template = "empty", timeoutTicks = 450)
@@ -442,7 +510,12 @@ public final class RecruitsMovementGameTests {
             if (traveled >= 12.0D && traveled <= 40.0D) {
                 cruiseSpeedSum[0] += speed;
                 cruiseSamples[0]++;
-                if (previousSpeed[0] - speed > 0.06D) abruptSlowdowns[0]++;
+                if (previousSpeed[0] - speed > 0.06D) {
+                    abruptSlowdowns[0]++;
+                    LOGGER.info("Recruit ground cruise slowdown vehicle={} tick={} traveled={} previousSpeed={} speed={} controls={}",
+                            type, helper.getTick(), traveled, previousSpeed[0], speed,
+                            SbwGameTestVehicle.flightControl(fixture.vehicle));
+                }
             }
             previousSpeed[0] = speed;
             if (!fixture.driver.getShouldMovePos() && fixture.driver.getFollowState() == 2) {
@@ -469,6 +542,11 @@ public final class RecruitsMovementGameTests {
     }
 
     private static void verifyGroundTurn(GameTestHelper helper, String type, float yaw, boolean redirect, boolean rearWall) {
+        verifyGroundTurn(helper, type, yaw, redirect, rearWall, false);
+    }
+
+    private static void verifyGroundTurn(GameTestHelper helper, String type, float yaw, boolean redirect,
+                                         boolean rearWall, boolean verifyContinuity) {
         Fixture fixture = fixture(helper, type, false, true);
         fixture.vehicle.setYRot(yaw);
         if (rearWall) {
@@ -483,6 +561,10 @@ public final class RecruitsMovementGameTests {
         Vec3[] previous = {fixture.vehicle.position()};
         double[] traveled = {0.0D};
         boolean[] redirected = {!redirect};
+        int[] pauseTicks = {0};
+        int[] longestPause = {0};
+        int[] direction = {0};
+        int[] reversals = {0};
         helper.onEachTick(() -> {
             fixture.observe(helper);
             Vec3 position = fixture.vehicle.position();
@@ -498,6 +580,21 @@ public final class RecruitsMovementGameTests {
             }
             if (!redirected[0]) return;
             double distance = horizontalDistance(position, destination[0]);
+            if (verifyContinuity) {
+                double speed = fixture.vehicle.getDeltaMovement().horizontalDistance();
+                pauseTicks[0] = distance > 8.0D && speed < 0.08D ? pauseTicks[0] + 1 : 0;
+                longestPause[0] = Math.max(longestPause[0], pauseTicks[0]);
+                double heading = Math.toRadians(fixture.vehicle.getYRot());
+                double longitudinalSpeed = fixture.vehicle.getDeltaMovement()
+                        .dot(new Vec3(-Math.sin(heading), 0.0D, Math.cos(heading)));
+                int moving = longitudinalSpeed > 0.04D ? 1 : longitudinalSpeed < -0.04D ? -1 : 0;
+                if (moving != 0) {
+                    if (direction[0] != 0 && direction[0] != moving) reversals[0]++;
+                    direction[0] = moving;
+                }
+                helper.assertTrue(pauseTicks[0] <= 40, "Redirect stalled in open space: ticks=" + pauseTicks[0]);
+                helper.assertTrue(reversals[0] <= 4, "Redirect repeatedly shunted in open space: reversals=" + reversals[0]);
+            }
             var controls = SbwGameTestVehicle.flightControl(fixture.vehicle);
             if (!type.equals("m_1a_2") && controls.up()) {
                 helper.assertFalse(controls.left() || controls.right(), "Wheel braking engaged a handbrake drift");
@@ -517,6 +614,9 @@ public final class RecruitsMovementGameTests {
                         "Turning command completed without stopping");
                 LOGGER.info("Recruit ground turn result vehicle={} initialYaw={} redirect={} wall={} arrivalTick={} distance={} traveled={}",
                         type, yaw, redirect, rearWall, helper.getTick(), distance, traveled[0]);
+                if (verifyContinuity) {
+                    LOGGER.info("Recruit redirect continuity longestPause={} reversals={}", longestPause[0], reversals[0]);
+                }
                 fixture.close();
                 helper.succeed();
             }

@@ -108,6 +108,7 @@ final class HelicopterObstacleCorpus {
     }
 
     private void spawnBatch() {
+        com.scarasol.vindicatorsrumble.gametest.profile.HelicopterSearchProfile.fixtureTick();
         int count = Math.min(BATCH_SIZE, SCENARIO_COUNT - this.generated);
         for (int slot = 0; slot < count; slot++) {
             int slotX = slot % GRID_COLUMNS;

@@ -1,4 +1,4 @@
-package com.scarasol.vindicatorsrumble.mixin.sbw;
+package com.scarasol.vindicatorsrumble.mixin;
 
 import com.scarasol.vindicatorsrumble.api.vehicle.VehicleDimensions;
 import com.scarasol.vindicatorsrumble.util.VehiclePathContext;
@@ -25,11 +25,13 @@ public abstract class VehicleNodeEvaluatorMixin {
 
     @Inject(method = "prepare", at = @At("TAIL"))
     private void vindicatorsRumble$useVehiclePathDimensions(PathNavigationRegion region, Mob mob, CallbackInfo ci) {
-        VehiclePathContext.dimensionsFor(mob).ifPresent(this::applyVehicleDimensions);
+        VehiclePathContext.dimensionsFor(mob).ifPresent(dimensions ->
+                this.applyVehicleDimensions(dimensions, VehiclePathContext.isNarrowFor(mob)));
     }
 
-    private void applyVehicleDimensions(VehicleDimensions dimensions) {
-        int horizontal = Math.max(1, Mth.ceil(dimensions.conservativeHorizontalSize()));
+    private void applyVehicleDimensions(VehicleDimensions dimensions, boolean narrow) {
+        // Narrow-road candidates reserve width; their complete body segments are checked separately.
+        int horizontal = Math.max(1, Mth.ceil(narrow ? dimensions.width() : dimensions.conservativeHorizontalSize()));
         this.entityWidth = horizontal;
         this.entityDepth = horizontal;
         this.entityHeight = Math.max(1, Mth.ceil(dimensions.height()));

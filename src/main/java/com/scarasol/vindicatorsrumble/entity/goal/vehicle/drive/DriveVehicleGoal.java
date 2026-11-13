@@ -2,12 +2,14 @@ package com.scarasol.vindicatorsrumble.entity.goal.vehicle.drive;
 
 import com.scarasol.vindicatorsrumble.api.vehicle.VehicleController;
 import com.scarasol.vindicatorsrumble.api.vehicle.VehicleMovementType;
+import com.scarasol.vindicatorsrumble.api.vehicle.VehicleInput;
 import com.scarasol.vindicatorsrumble.compat.VehicleControllers;
 import com.scarasol.vindicatorsrumble.config.CommonConfig;
 import com.scarasol.vindicatorsrumble.entity.goal.vehicle.common.VehicleAiGoal;
 import com.scarasol.vindicatorsrumble.entity.goal.vehicle.drive.ground.GroundDriveStrategy;
 import com.scarasol.vindicatorsrumble.entity.goal.vehicle.drive.helicopter.HelicopterDriveStrategy;
 import com.scarasol.vindicatorsrumble.util.VehicleAiLogger;
+import com.scarasol.vindicatorsrumble.util.VehicleSmokeDefense;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.ai.goal.Goal;
 
@@ -21,6 +23,7 @@ public class DriveVehicleGoal extends Goal implements VehicleAiGoal {
     private final HelicopterDriveStrategy helicopterStrategy;
     private VehicleController controller;
     private DriveStrategy strategy;
+    private boolean smokeOnly;
 
     public DriveVehicleGoal(Mob mob) {
         this(mob, Mode.COMBAT);
@@ -63,18 +66,27 @@ public class DriveVehicleGoal extends Goal implements VehicleAiGoal {
         }
         this.controller = current.get();
         this.strategy = this.strategyFor(this.controller);
-        return this.strategy.canUse(this.controller, true);
+        this.smokeOnly = false;
+        if (this.strategy.canUse(this.controller, true)) {
+            return true;
+        }
+        this.smokeOnly = this.mode == Mode.NAVIGATION && !this.otherDriverRunning()
+                && VehicleSmokeDefense.shouldDeploy(this.mob, this.controller);
+        return this.smokeOnly;
     }
 
     @Override
     public boolean canContinueToUse() {
-        if (this.controller == null
+        if (!CommonConfig.ENABLE_VEHICLE_AI.get() || this.controller == null
                 || !this.controller.isValid()
                 || !this.controller.canDrive(this.mob)
                 || !this.mob.isPassenger()) {
             return false;
         }
         this.strategy = this.strategyFor(this.controller);
+        if (this.smokeOnly) {
+            return !this.otherDriverRunning() && VehicleSmokeDefense.shouldDeploy(this.mob, this.controller);
+        }
         return this.strategy.canContinueToUse(this.controller);
     }
 
@@ -83,7 +95,7 @@ public class DriveVehicleGoal extends Goal implements VehicleAiGoal {
         if (this.strategy == null && this.controller != null) {
             this.strategy = this.strategyFor(this.controller);
         }
-        if (this.strategy != null && this.controller != null) {
+        if (!this.smokeOnly && this.strategy != null && this.controller != null) {
             this.strategy.start(this.controller);
             VehicleAiLogger.debug(this.mob, "{} drive goal started for vehicle {} type={} flight={} groundNav={} strategy={}",
                     this.mode,
@@ -97,15 +109,16 @@ public class DriveVehicleGoal extends Goal implements VehicleAiGoal {
 
     @Override
     public void stop() {
-        if (this.strategy != null && this.controller != null) {
+        if (!this.smokeOnly && this.strategy != null && this.controller != null) {
             this.strategy.stop(this.controller);
         }
-        if (this.controller != null) {
+        if (!this.smokeOnly && this.controller != null) {
             this.controller.stopDriving(this.mob);
             VehicleAiLogger.debug(this.mob, "{} drive goal stopped for vehicle {}", this.mode, this.controller.entity().getId());
         }
         this.controller = null;
         this.strategy = null;
+        this.smokeOnly = false;
     }
 
     @Override
@@ -113,7 +126,19 @@ public class DriveVehicleGoal extends Goal implements VehicleAiGoal {
         if (this.controller == null || this.strategy == null) {
             return;
         }
+        if (this.smokeOnly) {
+            if (!this.otherDriverRunning()) {
+                this.controller.drive(this.mob, VehicleInput.NONE);
+            }
+            return;
+        }
         this.strategy.tick(this.controller);
+    }
+
+    private boolean otherDriverRunning() {
+        return this.mob.goalSelector.getAvailableGoals().stream()
+                .anyMatch(goal -> goal.isRunning() && goal.getGoal() instanceof DriveVehicleGoal drive
+                        && drive != this && !drive.smokeOnly);
     }
 
     private DriveStrategy strategyFor(VehicleController controller) {

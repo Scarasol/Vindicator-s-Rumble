@@ -37,6 +37,13 @@ class GroundManeuverTest {
     }
 
     @Test
+    void clearFrontDoesNotReverseJustBecauseRearHasMoreSpace() {
+        GroundClearance clearance = new GroundClearance(5.0D, 8.0D, 3.0D, 3.0D);
+
+        assertEquals(GroundManeuverStep.SWING_FORWARD, GroundDriveStrategy.selectInitialManeuverStep(clearance, false));
+    }
+
+    @Test
     void tightFrontAndBackStillChoosesShortMovement() {
         GroundClearance clearance = new GroundClearance(0.9D, 0.8D, 3.0D, 3.0D);
 
@@ -74,6 +81,14 @@ class GroundManeuverTest {
     }
 
     @Test
+    void forwardSwingKeepsEscapeTurnWhileObstacleRemainsAhead() {
+        GroundClearance clearance = new GroundClearance(4.0D, 8.0D, 8.0D, 8.0D);
+
+        assertEquals(1, GroundDriveStrategy.selectManeuverForwardTurn(1, -28.0D, clearance));
+        assertEquals(-1, GroundDriveStrategy.selectManeuverForwardTurn(-1, 28.0D, clearance));
+    }
+
+    @Test
     void forwardSwingUsesOpenSideWhenVehicleIsSideSqueezed() {
         GroundClearance clearance = new GroundClearance(5.0D, 5.0D, 0.9D, 5.0D);
 
@@ -87,8 +102,7 @@ class GroundManeuverTest {
         assertTrue(GroundDriveStrategy.shouldAbortManeuverPulse(
                 new VehicleInput(true, false, false, false, false, false, false, false, false, false),
                 clearance,
-                2,
-                0));
+                2));
     }
 
     @Test
@@ -98,8 +112,7 @@ class GroundManeuverTest {
         assertTrue(GroundDriveStrategy.shouldAbortManeuverPulse(
                 new VehicleInput(false, true, false, false, false, false, false, false, false, false),
                 clearance,
-                2,
-                0));
+                2));
     }
 
     @Test
@@ -109,34 +122,29 @@ class GroundManeuverTest {
         assertFalse(GroundDriveStrategy.shouldAbortManeuverPulse(
                 new VehicleInput(true, false, true, false, false, false, false, false, false, false),
                 sideSqueezed,
-                1,
-                0));
+                1));
         assertFalse(GroundDriveStrategy.shouldAbortManeuverPulse(
                 new VehicleInput(true, false, true, false, false, false, false, false, false, false),
                 sideSqueezed,
-                8,
-                0));
+                8));
     }
 
     @Test
-    void maneuverPulseAbortsEitherThrottleDirectionWhenItMakesNoProgress() {
+    void slowThrottleReversalIsNotTreatedAsACollisionInOpenSpace() {
         GroundClearance clearance = new GroundClearance(8.0D, 8.0D, 8.0D, 8.0D);
 
-        assertTrue(GroundDriveStrategy.shouldAbortManeuverPulse(
+        assertFalse(GroundDriveStrategy.shouldAbortManeuverPulse(
                 new VehicleInput(true, false, false, false, false, false, false, false, false, false),
                 clearance,
-                8,
-                5));
-        assertTrue(GroundDriveStrategy.shouldAbortManeuverPulse(
+                8));
+        assertFalse(GroundDriveStrategy.shouldAbortManeuverPulse(
                 new VehicleInput(false, true, false, false, false, false, false, false, false, false),
                 clearance,
-                8,
-                5));
+                8));
         assertFalse(GroundDriveStrategy.shouldAbortManeuverPulse(
                 VehicleInput.BRAKE,
                 clearance,
-                8,
-                5));
+                8));
     }
 
     @Test
@@ -168,6 +176,23 @@ class GroundManeuverTest {
         GroundClearance clearance = new GroundClearance(2.0D, 8.0D, 6.0D, 2.0D);
 
         assertEquals(GroundManeuverStep.BACK_STRAIGHT, GroundDriveStrategy.nextBackTurnStep(clearance, 18, 0));
+    }
+
+    @Test
+    void backingPulseDoesNotFlipForwardOnEqualOrNoisyClearance() {
+        assertEquals(GroundManeuverStep.BACK_TURN, GroundDriveStrategy.nextBackTurnStep(
+                new GroundClearance(0.008D, 0.008D, 1.46D, 8.0D), 4, 0));
+        assertEquals(GroundManeuverStep.BACK_STRAIGHT, GroundDriveStrategy.nextBackStraightStep(
+                new GroundClearance(5.0D, 4.8D, 8.0D, 8.0D), 4, 0));
+    }
+
+    @Test
+    void openRearDoesNotCancelBackingOnLargerFrontReading() {
+        GroundClearance clearance = new GroundClearance(8.0D, 6.1D, 8.0D, 1.4D);
+
+        assertEquals(GroundManeuverStep.BACK_STRAIGHT, GroundDriveStrategy.nextBackStraightStep(clearance, 4, 0));
+        assertEquals(GroundManeuverStep.BACK_TURN, GroundDriveStrategy.nextBackStraightStep(clearance, 5, 5));
+        assertEquals(GroundManeuverStep.BACK_TURN, GroundDriveStrategy.nextBackTurnStep(clearance, 4, 0));
     }
 
     @Test

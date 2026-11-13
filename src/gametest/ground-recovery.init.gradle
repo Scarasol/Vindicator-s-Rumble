@@ -1,0 +1,84 @@
+// Focused real-tick ground recovery and native Recruits command verification.
+gradle.beforeProject { project ->
+    project.configurations.configureEach {
+        if (name.toLowerCase(java.util.Locale.ROOT).contains('runtime')) {
+            exclude group: 'curse.maven', module: 'sona-survival-101-1023345'
+            exclude group: 'curse.maven', module: 'zombie-survival-kit-839371'
+        }
+    }
+    project.afterEvaluate {
+        project.sourceSets.gameTest.java {
+            setSrcDirs(['src/gametest/java'])
+            if (project.hasProperty('groundCommands')) {
+                include 'com/scarasol/vindicatorsrumble/gametest/vehicle/RecruitsMovementGameTests.java'
+                include 'com/scarasol/vindicatorsrumble/compat/sbw/SbwGameTestVehicle.java'
+            } else if (project.hasProperty('groundConvergence')) {
+                include 'com/scarasol/vindicatorsrumble/gametest/vehicle/GroundConvergenceGameTests.java'
+            } else if (project.hasProperty('groundCorner')) {
+                include 'com/scarasol/vindicatorsrumble/gametest/vehicle/GroundCornerRecoveryGameTests.java'
+            } else if (project.hasProperty('groundNarrow')) {
+                include 'com/scarasol/vindicatorsrumble/gametest/vehicle/GroundNarrowRoadGameTests.java'
+            } else {
+                include 'com/scarasol/vindicatorsrumble/gametest/vehicle/GroundRecoveryGameTests.java'
+                include 'com/scarasol/vindicatorsrumble/gametest/vehicle/GroundContinuityGameTests.java'
+                include 'com/scarasol/vindicatorsrumble/gametest/vehicle/GroundCornerRecoveryGameTests.java'
+                include 'com/scarasol/vindicatorsrumble/gametest/vehicle/GroundShuntRecoveryGameTests.java'
+                include 'com/scarasol/vindicatorsrumble/gametest/vehicle/GroundNarrowRoadGameTests.java'
+                if (!project.hasProperty('groundLegacy')) {
+                    include 'com/scarasol/vindicatorsrumble/gametest/vehicle/GroundConvergenceGameTests.java'
+                }
+            }
+            if (project.hasProperty('groundProfile')) {
+                include 'com/scarasol/vindicatorsrumble/gametest/profile/GroundRadarProfile.java'
+                include 'com/scarasol/vindicatorsrumble/gametest/profile/GroundDriveProfile.java'
+                include 'com/scarasol/vindicatorsrumble/gametest/profile/mixin/GroundRadarTimingMixin.java'
+                include 'com/scarasol/vindicatorsrumble/gametest/profile/mixin/GroundPathTimingMixin.java'
+                include 'com/scarasol/vindicatorsrumble/gametest/profile/mixin/GroundDriveTimingMixin.java'
+                include 'com/scarasol/vindicatorsrumble/gametest/profile/mixin/GroundNavigationTimingMixin.java'
+            }
+        }
+        project.tasks.named('compileGameTestJava').configure {
+            destinationDirectory = project.layout.buildDirectory.dir('ground-recovery/classes')
+        }
+        project.sourceSets.gameTest.output.classesDirs.setFrom(
+                project.layout.buildDirectory.dir('ground-recovery/classes'))
+        project.minecraft.runs.gameTestServer {
+            workingDirectory project.file('build/ground-recovery/run')
+            property 'forge.logging.console.level', 'info'
+            if (project.hasProperty('groundTrace')) {
+                property 'vindicatorsrumble.groundTrace', 'true'
+            }
+            if (project.hasProperty('groundProfile')) {
+                args '--mixin', 'vindicators_rumble.gametest-ground-timing.mixins.json'
+            }
+        }
+        project.tasks.named('prepareIsolatedGameTestWorld').configure { enabled = false }
+        def prepare = project.tasks.register('prepareGroundRecoveryWorld') {
+            doLast {
+                def directory = project.file('build/ground-recovery/run')
+                def world = new File(directory, 'world').canonicalFile
+                if (!world.toPath().startsWith(project.layout.buildDirectory.get().asFile.canonicalFile.toPath())) {
+                    throw new GradleException('Ground recovery world must stay within build')
+                }
+                project.delete(world)
+                directory.mkdirs()
+                def properties = new Properties()
+                properties.setProperty('level-name', 'world')
+                properties.setProperty('level-type', 'minecraft:flat')
+                properties.setProperty('generator-settings', '{"layers":[{"block":"minecraft:bedrock","height":1},{"block":"minecraft:dirt","height":2},{"block":"minecraft:grass_block","height":1}],"biome":"minecraft:plains"}')
+                properties.setProperty('generate-structures', 'false')
+                properties.setProperty('allow-flight', 'true')
+                new File(directory, 'server.properties').withOutputStream {
+                    properties.store(it, 'Isolated ground recovery world')
+                }
+                project.copy {
+                    from 'src/gametest/config'
+                    into new File(directory, 'config')
+                }
+            }
+        }
+        project.tasks.matching {
+            it.name == 'runGameTestServer' || it.name == 'prepareRunGameTestServerCompile'
+        }.configureEach { dependsOn prepare }
+    }
+}

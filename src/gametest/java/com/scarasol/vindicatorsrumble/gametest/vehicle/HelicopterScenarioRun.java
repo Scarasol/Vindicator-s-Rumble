@@ -452,7 +452,8 @@ final class HelicopterScenarioRun {
                 this.yawErrorToTarget(position), altitude, signedPitch, roll,
                 flightControl.mouseX(), flightControl.mouseY(), flightControl.deltaRot(), flightControl.rotor(),
                 flightControl.forward(), flightControl.back(), flightControl.left(), flightControl.right(),
-                flightControl.up(), flightControl.down(), flightControl.sprint()));
+                flightControl.up(), flightControl.down(), flightControl.sprint())
+                + com.scarasol.vindicatorsrumble.gametest.profile.HelicopterPlanTrace.take(this.vehicle.getId()));
         this.previousTraceForward = this.lastForwardCoordinate;
         this.previousTraceLateral = this.lastLateralCoordinate;
         this.previousTraceSide = this.lastSideClearance;

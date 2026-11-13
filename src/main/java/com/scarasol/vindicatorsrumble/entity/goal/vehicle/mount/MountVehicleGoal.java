@@ -8,6 +8,7 @@ import com.scarasol.vindicatorsrumble.entity.goal.vehicle.common.VehicleAiGoal;
 import com.scarasol.vindicatorsrumble.util.AllegianceUtil;
 import com.scarasol.vindicatorsrumble.util.VehicleAiLogger;
 import com.scarasol.vindicatorsrumble.util.VehicleClaimManager;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.ai.goal.Goal;
 import net.minecraft.world.phys.Vec3;
@@ -24,12 +25,14 @@ public class MountVehicleGoal extends Goal implements VehicleAiGoal {
     private static final double APPROACH_OFFSET = 1.5D;
     private static final double MIN_APPROACH_RADIUS = 2.0D;
     private static final double MIN_DIRECTION_VECTOR_SQR = 1.0E-4D;
+    private static final int SEARCH_RETRY_TICKS = 20;
 
     private final Mob mob;
     private VehicleController targetController;
     private SeatHandle targetSeat;
     private State state = State.SEARCH;
-    private int cooldown;
+    private long nextSearchTick = Long.MIN_VALUE;
+    private Entity searchedVehicle;
     private boolean switchingSeat;
 
     public MountVehicleGoal(Mob mob) {
@@ -42,14 +45,20 @@ public class MountVehicleGoal extends Goal implements VehicleAiGoal {
         if (!CommonConfig.ENABLE_VEHICLE_AI.get()) {
             return false;
         }
-        if (this.cooldown > 0) {
-            this.cooldown--;
+        Entity vehicle = this.mob.getVehicle();
+        if (vehicle != this.searchedVehicle) {
+            this.searchedVehicle = vehicle;
+            this.nextSearchTick = Long.MIN_VALUE;
+        }
+        long now = this.mob.level().getGameTime();
+        if (now < this.nextSearchTick) {
             return false;
         }
-        if (this.mob.isPassenger()) {
-            return this.searchSeatSwitch();
+        boolean found = this.mob.isPassenger() ? this.searchSeatSwitch() : this.search();
+        if (!found) {
+            this.nextSearchTick = now + SEARCH_RETRY_TICKS + Math.floorMod(this.mob.getId(), SEARCH_RETRY_TICKS + 1);
         }
-        return this.search();
+        return found;
     }
 
     @Override
@@ -317,7 +326,7 @@ public class MountVehicleGoal extends Goal implements VehicleAiGoal {
 
     private void fail() {
         VehicleAiLogger.debug(this.mob, "Mount goal failed in state {}", this.state);
-        this.cooldown = 40;
+        this.nextSearchTick = this.mob.level().getGameTime() + 40L;
         this.state = State.COOLDOWN;
         this.mob.getNavigation().stop();
     }

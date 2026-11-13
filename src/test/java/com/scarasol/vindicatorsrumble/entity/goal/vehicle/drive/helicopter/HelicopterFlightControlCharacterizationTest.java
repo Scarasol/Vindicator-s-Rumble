@@ -396,6 +396,126 @@ class HelicopterFlightControlCharacterizationTest {
     }
 
     @Test
+    void pullOutReleasesClimbPowerBeforeItsVerticalMomentumOvershoots() {
+        Vec3 position = new Vec3(0.0D, 30.0D, 0.0D);
+        HelicopterFlightPlanner.Plan pullOut = plan(
+                position.add(0.0D, 2.0D, 0.0D), position.add(20.0D, 0.0D, 0.0D),
+                0.0D, true, true, HelicopterFlightPlanner.Phase.PULL_OUT);
+        VehicleFlightInput rising = new HelicopterFlightControl().command(
+                state(position, new Vec3(0.05D, 0.4D, 0.0D), -90.0F, 0.0F, 0.0F,
+                        true, true, 0.12F, 18.0D),
+                pullOut.flightRequest(), HelicopterEnvironment.NONE);
+        assertFalse(rising.input().forward());
+        assertTrue(rising.input().down());
+
+        VehicleFlightInput falling = new HelicopterFlightControl().command(
+                state(position, new Vec3(0.05D, -0.4D, 0.0D), -90.0F, 0.0F, 0.0F,
+                        true, true, 0.09F, 18.0D),
+                pullOut.flightRequest(), HelicopterEnvironment.NONE);
+        assertTrue(falling.input().forward());
+        assertFalse(falling.input().down());
+    }
+
+    @Test
+    void pullOutStillPrioritizesLiftWhileItsAttitudeIsUnsafe() {
+        Vec3 position = new Vec3(0.0D, 30.0D, 0.0D);
+        HelicopterFlightPlanner.Plan pullOut = plan(
+                position.add(0.0D, -4.0D, 0.0D), position.add(20.0D, 0.0D, 0.0D),
+                0.0D, true, true, HelicopterFlightPlanner.Phase.PULL_OUT);
+        VehicleFlightInput tilted = new HelicopterFlightControl().command(
+                state(position, new Vec3(0.4D, 0.4D, 0.0D), -90.0F, 45.0F, 0.0F,
+                        true, true, 0.12F, 18.0D),
+                pullOut.flightRequest(), HelicopterEnvironment.NONE);
+        assertTrue(tilted.input().forward());
+        assertFalse(tilted.input().down());
+        assertTrue(tilted.mouseY() < 0.0D);
+    }
+
+    @Test
+    void postDiveSettlingCanTrimPowerWithoutWaitingForHorizontalMotionToStop() {
+        Vec3 position = new Vec3(0.0D, 30.0D, 0.0D);
+        HelicopterFlightControl control = new HelicopterFlightControl();
+        HelicopterFlightPlanner.AircraftState rising = state(
+                position, new Vec3(0.4D, 0.4D, 0.0D), -90.0F, 0.0F, 0.0F,
+                true, true, 0.12F, 18.0D);
+        Vec3 target = position.add(20.0D, -10.0D, 0.0D);
+        control.command(rising, plan(target, target, 1.0D, false, true,
+                HelicopterFlightPlanner.Phase.DIVE_PASS).flightRequest(), HelicopterEnvironment.NONE);
+        VehicleFlightInput settling = control.command(rising,
+                plan(position.add(0.0D, 2.0D, 0.0D), target, 0.0D, true, true,
+                        HelicopterFlightPlanner.Phase.COMBAT_HOVER).flightRequest(), HelicopterEnvironment.NONE);
+        assertFalse(settling.input().forward());
+        assertTrue(settling.input().down());
+        assertFalse(settling.input().up());
+    }
+
+    @Test
+    void horizontalBrakingRetainsRequiredLiftWithoutPitchingIntoTheObstacle() {
+        Vec3 position = new Vec3(0.0D, 20.0D, 0.0D);
+        HelicopterFlightPlanner.Plan climb = plan(
+                position.add(20.0D, 7.0D, 0.0D), position.add(20.0D, 7.0D, 0.0D),
+                0.78D, false, true, HelicopterFlightPlanner.Phase.APPROACH);
+        HelicopterEnvironment obstacle = new HelicopterEnvironment(
+                false, true, false, 0, Double.NaN, 2.0D, 2.0D);
+        VehicleFlightInput braking = new HelicopterFlightControl().command(
+                state(position, new Vec3(0.4D, -0.2D, 0.0D), -90.0F, 10.0F, 0.0F,
+                        false, true, 0.07F, 20.0D),
+                climb.flightRequest(), obstacle);
+        assertTrue(braking.input().forward());
+        assertFalse(braking.input().down());
+        assertTrue(braking.input().up());
+        assertTrue(braking.mouseY() < 0.0D);
+    }
+
+    @Test
+    void climbingApproachReducesHorizontalAccelerationWithoutDroppingLift() {
+        Vec3 position = new Vec3(0.0D, 30.0D, 0.0D);
+        for (double speed : new double[]{0.0D, 0.5D}) {
+            HelicopterFlightPlanner.AircraftState aircraft = state(
+                    position, new Vec3(speed, 0.0D, 0.0D), -90.0F, 0.0F, 0.0F,
+                    false, true, 0.07F, 30.0D);
+            VehicleFlightInput level = new HelicopterFlightControl().command(aircraft,
+                    plan(position.add(6.0D, 0.0D, 0.0D), position.add(6.0D, 0.0D, 0.0D),
+                            0.78D, false, true, HelicopterFlightPlanner.Phase.APPROACH).flightRequest(),
+                    HelicopterEnvironment.NONE);
+            VehicleFlightInput climbing = new HelicopterFlightControl().command(aircraft,
+                    plan(position.add(6.0D, 8.0D, 0.0D), position.add(6.0D, 8.0D, 0.0D),
+                            0.78D, false, true, HelicopterFlightPlanner.Phase.APPROACH).flightRequest(),
+                    HelicopterEnvironment.NONE);
+            assertTrue(climbing.mouseY() < level.mouseY(), "speed=" + speed);
+            assertTrue(climbing.input().forward());
+            assertFalse(climbing.input().down());
+        }
+    }
+
+    @Test
+    void stableHoverPreservesTheTrimPowerFloorAndEmergencyLift() {
+        Vec3 position = new Vec3(0.0D, 30.0D, 0.0D);
+        HelicopterFlightPlanner.Plan hover = plan(
+                position.add(0.0D, -6.0D, 0.0D), position.add(20.0D, 0.0D, 0.0D),
+                0.0D, true, true, HelicopterFlightPlanner.Phase.COMBAT_HOVER);
+        HelicopterFlightPlanner.AircraftState rising = state(
+                position, new Vec3(0.0D, 0.1D, 0.0D), -90.0F, 0.0F, 0.0F,
+                true, true, 0.06F, 30.0D);
+        VehicleFlightInput trim = new HelicopterFlightControl().command(
+                rising, hover.flightRequest(), HelicopterEnvironment.NONE);
+        assertFalse(trim.input().forward());
+        assertFalse(trim.input().down());
+
+        HelicopterFlightPlanner.Plan cruise = plan(
+                position.add(20.0D, -6.0D, 0.0D), position.add(20.0D, 0.0D, 0.0D),
+                0.68D, false, true, HelicopterFlightPlanner.Phase.APPROACH);
+        assertFalse(new HelicopterFlightControl().command(
+                rising, cruise.flightRequest(), HelicopterEnvironment.NONE).input().down());
+        VehicleFlightInput emergency = new HelicopterFlightControl().command(
+                state(position, rising.velocity(), -90.0F, 0.0F, 0.0F,
+                        true, true, 0.06F, 6.0D),
+                hover.flightRequest(), HelicopterEnvironment.NONE);
+        assertTrue(emergency.input().forward());
+        assertFalse(emergency.input().down());
+    }
+
+    @Test
     void ordinaryCruiseWaitsForHoverReleaseCooldown() {
         HelicopterFlightControl control = new HelicopterFlightControl();
         Vec3 destination = new Vec3(40.0D, 28.0D, 0.0D);

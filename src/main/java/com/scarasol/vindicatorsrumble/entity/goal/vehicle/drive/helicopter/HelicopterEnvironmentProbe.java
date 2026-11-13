@@ -101,8 +101,11 @@ final class HelicopterEnvironmentProbe {
         if (shouldProbeObstacle) {
             if (this.directionChanged(direction)) {
                 this.refreshForwardRays(level, vehicle, controller.boundingBox(), direction);
+                // Both rays are fresh; preserve the next-tick rotation without casting them twice.
+                this.rayCursor = urgent ? RAY_FRONT : RAY_ELEVATED_FRONT;
+            } else {
+                this.refreshObstacleRays(level, vehicle, controller.boundingBox(), direction, urgent ? 2 : 1);
             }
-            this.refreshObstacleRays(level, vehicle, controller.boundingBox(), direction, urgent ? 2 : 1);
         } else {
             this.frontClearance = RAY_RANGE;
             this.frontObstacleY = Double.NaN;
