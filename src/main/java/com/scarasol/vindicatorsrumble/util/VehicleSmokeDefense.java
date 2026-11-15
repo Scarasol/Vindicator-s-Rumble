@@ -5,7 +5,6 @@ import com.scarasol.vindicatorsrumble.api.vehicle.VehicleInput;
 import com.scarasol.vindicatorsrumble.api.vehicle.VehicleThreats;
 import com.scarasol.vindicatorsrumble.compat.VehicleControllers;
 import com.scarasol.vindicatorsrumble.config.CommonConfig;
-import com.scarasol.vindicatorsrumble.init.ModTags;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
@@ -177,9 +176,8 @@ public final class VehicleSmokeDefense {
 
     private static boolean eligible(Mob mob, VehicleController controller) {
         return controller.level() instanceof ServerLevel
-                && CommonConfig.ENABLE_VEHICLE_AI.get()
+                && VehicleAiMemory.isVehicleAiEnabled(mob)
                 && mob.isAlive() && !mob.isNoAi() && mob.getVehicle() == controller.entity()
-                && mob.getType().is(ModTags.EntityTypes.VEHICLE_AI_USERS)
                 && controller.isValid() && controller.isControllable() && !controller.isWreck()
                 && controller.supportsSmoke() && controller.canDrive(mob)
                 && controller.controllingPassenger().orElse(null) == mob;

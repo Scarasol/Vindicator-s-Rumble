@@ -38,6 +38,7 @@ import net.minecraftforge.event.entity.player.PlayerInteractEvent;
 import net.minecraftforge.event.level.LevelEvent;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraftforge.eventbus.api.EventPriority;
 import net.minecraftforge.fml.common.Mod;
 
 import java.util.Map;
@@ -59,17 +60,20 @@ public class VehicleAiEventHandler {
             event.setCanceled(true);
             return;
         }
-        if (!CommonConfig.ENABLE_VEHICLE_AI.get()) {
-            return;
-        }
         if (!(event.getEntity() instanceof Mob mob)) {
             return;
         }
-        if (!mob.getType().is(ModTags.EntityTypes.VEHICLE_AI_USERS)) {
+        boolean enabled = CommonConfig.ENABLE_VEHICLE_AI.get()
+                && mob.getType().is(ModTags.EntityTypes.VEHICLE_AI_USERS);
+        VehicleAiMemory.setVehicleAiEnabled(mob, enabled);
+        if (!enabled) {
             return;
         }
 
         injectVehicleAiGoals(mob);
+        if (mob.isPassenger() && VehicleControllers.forMob(mob).isPresent()) {
+            VehicleTargetRangeManager.apply(mob);
+        }
     }
 
     @SubscribeEvent
@@ -83,8 +87,9 @@ public class VehicleAiEventHandler {
         if (ModCompat.isRecruitsLoaded()) {
             RecruitsCompat.release(entity);
         }
-        if (entity instanceof Mob mob && mob.getType().is(ModTags.EntityTypes.VEHICLE_AI_USERS)) {
+        if (entity instanceof Mob mob) {
             clearMobVehicleState(mob);
+            VehicleAiMemory.setVehicleAiEnabled(mob, false);
         }
         if (VehicleControllers.create(entity).isPresent()) {
             VehicleSmokeDefense.clear(entity);
@@ -99,9 +104,9 @@ public class VehicleAiEventHandler {
             VehicleThreats.clearEntity(event.getEntity());
         }
         if (!event.getEntity().level().isClientSide()
-                && event.getEntity() instanceof Mob mob
-                && mob.getType().is(ModTags.EntityTypes.VEHICLE_AI_USERS)) {
+                && event.getEntity() instanceof Mob mob) {
             clearMobVehicleState(mob);
+            VehicleAiMemory.setVehicleAiEnabled(mob, false);
             if (ModCompat.isRecruitsLoaded()) {
                 RecruitsCompat.release(mob);
             }
@@ -155,8 +160,11 @@ public class VehicleAiEventHandler {
 
     @SubscribeEvent
     public static void onPlayerInteractEntity(PlayerInteractEvent.EntityInteract event) {
+        if (event.getLevel().isClientSide()) {
+            return;
+        }
         Player player = event.getEntity();
-        if (!CommonConfig.ENABLE_VEHICLE_AI.get() || player.isShiftKeyDown()
+        if (player.isShiftKeyDown()
                 || !hasNonFriendlyVehiclePassenger(player, event.getTarget())) {
             return;
         }
@@ -164,9 +172,9 @@ public class VehicleAiEventHandler {
         event.setCanceled(true);
     }
 
-    @SubscribeEvent
+    @SubscribeEvent(priority = EventPriority.LOWEST)
     public static void onEntityMount(EntityMountEvent event) {
-        if (event.getLevel().isClientSide() || !CommonConfig.ENABLE_VEHICLE_AI.get()) {
+        if (event.getLevel().isClientSide()) {
             return;
         }
         if (event.isMounting() && event.getEntityMounting() instanceof Player player) {
@@ -178,10 +186,6 @@ public class VehicleAiEventHandler {
         if (!(event.getEntityMounting() instanceof Mob mob)) {
             return;
         }
-        if (!mob.getType().is(ModTags.EntityTypes.VEHICLE_AI_USERS)) {
-            return;
-        }
-
         if (event.isDismounting()) {
             VehicleControllers.create(event.getEntityBeingMounted())
                     .filter(controller -> controller.canDrive(mob))
@@ -189,13 +193,11 @@ public class VehicleAiEventHandler {
             if (ModCompat.isRecruitsLoaded()) {
                 RecruitsCompat.release(mob);
             }
-            clearDebugTargetGlow(mob);
-            VehicleTargetRangeManager.remove(mob);
-            VehicleAiMemory.clear(mob);
+            clearMobVehicleState(mob);
             return;
         }
 
-        if (!event.isMounting()) {
+        if (!event.isMounting() || !VehicleAiMemory.isVehicleAiEnabled(mob)) {
             return;
         }
         if (VehicleControllers.create(event.getEntityBeingMounted()).isEmpty()) {
@@ -207,7 +209,9 @@ public class VehicleAiEventHandler {
 
     private static boolean hasNonFriendlyVehiclePassenger(Player player, Entity vehicle) {
         return VehicleControllers.create(vehicle)
-                .map(controller -> AllegianceUtil.hasNonFriendlyPassenger(player, controller.passengers()))
+                .map(controller -> controller.passengers().stream()
+                        .anyMatch(passenger -> passenger instanceof Mob mob && VehicleAiMemory.isVehicleAiEnabled(mob))
+                        && AllegianceUtil.hasNonFriendlyPassenger(player, controller.passengers()))
                 .orElse(false);
     }
 
@@ -219,14 +223,14 @@ public class VehicleAiEventHandler {
         if (!(event.getEntity() instanceof Mob mob)) {
             return;
         }
-        if (!mob.getType().is(ModTags.EntityTypes.VEHICLE_AI_USERS)) {
+        if (!VehicleAiMemory.isVehicleAiEnabled(mob)) {
             return;
         }
         if (ModCompat.isRecruitsLoaded()) {
             RecruitsCompat.updateStrategicFire(mob);
             RecruitsCompat.updateNavigation(mob);
         }
-        if (!CommonConfig.ENABLE_VEHICLE_AI.get() || !mob.isPassenger()) {
+        if (!mob.isPassenger()) {
             return;
         }
 

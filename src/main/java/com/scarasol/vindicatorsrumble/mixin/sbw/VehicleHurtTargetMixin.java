@@ -1,7 +1,6 @@
 package com.scarasol.vindicatorsrumble.mixin.sbw;
 
 import com.atsuishio.superbwarfare.entity.vehicle.base.VehicleEntity;
-import com.scarasol.vindicatorsrumble.init.ModTags;
 import com.scarasol.vindicatorsrumble.util.VehicleAiLogger;
 import com.scarasol.vindicatorsrumble.util.VehicleAiMemory;
 import com.scarasol.vindicatorsrumble.util.VehicleAiTuning;
@@ -27,7 +26,7 @@ public abstract class VehicleHurtTargetMixin {
 
         VehicleEntity vehicle = (VehicleEntity) (Object) this;
         for (Entity passenger : vehicle.getPassengers()) {
-            if (!(passenger instanceof Mob mob) || !mob.getType().is(ModTags.EntityTypes.VEHICLE_AI_USERS)) {
+            if (!(passenger instanceof Mob mob) || !VehicleAiMemory.isVehicleAiEnabled(mob)) {
                 continue;
             }
             if (!VehicleAiTuning.isValidVehicleCombatTarget(mob, target)) {

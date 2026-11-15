@@ -90,6 +90,13 @@ public class SbwVehicleController implements VehicleController {
     }
 
     @Override
+    public void placeGenerationCandidate(Vec3 position, float yaw) {
+        this.vehicle.moveTo(position.x, position.y, position.z, yaw, 0.0F);
+        this.vehicle.updateOBB();
+        this.vehicle.refreshBoundingBoxFromOBBs();
+    }
+
+    @Override
     public AABB localCollisionBounds() {
         var collision = this.vehicle.getCollisionOBBInfo();
         if (collision == null) {
@@ -831,8 +838,20 @@ public class SbwVehicleController implements VehicleController {
                     : WeaponFireWindow.unknown();
         }
 
-        double targetYaw = relativeYawToVehicle(metrics.targetDirection());
-        double targetPitch = sbwPitch(metrics.targetDirection());
+        double targetYaw;
+        double targetPitch;
+        if (metrics.aimMode() == WeaponAimMode.INDEPENDENT) {
+            boolean turret = this.vehicle.hasTurret() && seatIndex == this.vehicle.getTurretControllerIndex();
+            Vec3 direction = turret ? this.vehicle.getBarrelVector(1.0F) : this.vehicle.getPassengerWeaponStationVector(1.0F);
+            double yaw = turret ? this.vehicle.getTurretYRot() : this.vehicle.getGunYRot();
+            double pitch = turret ? this.vehicle.getTurretXRot() : this.vehicle.getGunXRot();
+            // Match SBW's joint-angle corrections; positive joint pitch lowers the barrel.
+            targetYaw = yaw + Mth.wrapDegrees(sbwYaw(metrics.targetDirection()) - sbwYaw(direction));
+            targetPitch = pitch + Mth.wrapDegrees(sbwPitch(direction) - sbwPitch(metrics.targetDirection()));
+        } else {
+            targetYaw = relativeYawToVehicle(metrics.targetDirection());
+            targetPitch = -sbwPitch(metrics.targetDirection());
+        }
         double yawError = range.errorToYaw(targetYaw);
         double pitchError = range.errorToPitch(targetPitch);
         WeaponFireWindow window;
@@ -1034,8 +1053,8 @@ public class SbwVehicleController implements VehicleController {
             return new FireWindowRange(
                     -this.vehicle.getTurretMaxYaw(),
                     -this.vehicle.getTurretMinYaw(),
-                    -this.vehicle.getTurretMaxPitch(),
-                    -this.vehicle.getTurretMinPitch());
+                    -this.vehicle.getTurretMaxPitch() + this.vehicle.getCustomTurretMaxPitch(),
+                    -this.vehicle.getTurretMinPitch() - this.vehicle.getCustomTurretMinPitch());
         }
         if (aimMode == WeaponAimMode.INDEPENDENT
                 && this.vehicle.hasPassengerWeaponStation()
@@ -1322,7 +1341,8 @@ public class SbwVehicleController implements VehicleController {
     }
 
     private boolean prefersGroundTarget(Mob mob, Entity target, int weaponIndex) {
-        if (target == null || !target.getRootVehicle().onGround()) {
+        if (target == null || !target.getRootVehicle().onGround()
+                || target.getRootVehicle() instanceof VehicleEntity) {
             return false;
         }
         int seatIndex = this.vehicle.getSeatIndex(mob);

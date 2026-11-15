@@ -3,10 +3,10 @@ package com.scarasol.vindicatorsrumble.entity.goal.vehicle.mount;
 import com.scarasol.vindicatorsrumble.api.vehicle.SeatHandle;
 import com.scarasol.vindicatorsrumble.api.vehicle.VehicleController;
 import com.scarasol.vindicatorsrumble.compat.VehicleControllers;
-import com.scarasol.vindicatorsrumble.config.CommonConfig;
 import com.scarasol.vindicatorsrumble.entity.goal.vehicle.common.VehicleAiGoal;
 import com.scarasol.vindicatorsrumble.util.AllegianceUtil;
 import com.scarasol.vindicatorsrumble.util.VehicleAiLogger;
+import com.scarasol.vindicatorsrumble.util.VehicleAiMemory;
 import com.scarasol.vindicatorsrumble.util.VehicleClaimManager;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.Mob;
@@ -42,7 +42,7 @@ public class MountVehicleGoal extends Goal implements VehicleAiGoal {
 
     @Override
     public boolean canUse() {
-        if (!CommonConfig.ENABLE_VEHICLE_AI.get()) {
+        if (!VehicleAiMemory.isVehicleAiEnabled(this.mob)) {
             return false;
         }
         Entity vehicle = this.mob.getVehicle();

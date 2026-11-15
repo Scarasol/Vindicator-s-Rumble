@@ -158,6 +158,11 @@ public interface VehicleController {
     default void initializeGeneratedSupplies() {
     }
 
+    /** Place a generation candidate and synchronize native collision geometry before validation. */
+    default void placeGenerationCandidate(Vec3 position, float yaw) {
+        this.entity().moveTo(position.x, position.y, position.z, yaw, 0.0F);
+    }
+
     default boolean initializeAirborneHover(Mob mob) {
         return false;
     }

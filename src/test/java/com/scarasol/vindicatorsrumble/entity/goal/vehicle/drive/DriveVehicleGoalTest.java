@@ -81,6 +81,30 @@ class DriveVehicleGoalTest {
     }
 
     @Test
+    void unarmedDriverReliesOnOccupiedGunnerAmmoOnlyWhenAmmoIsFinite() {
+        assertTrue(GroundDriveStrategy.shouldUseRamming(
+                VehicleMovementType.WHEEL, true, false, false, true, true, false));
+        assertFalse(GroundDriveStrategy.shouldUseRamming(
+                VehicleMovementType.WHEEL, true, false, false, true, true, true));
+        assertFalse(GroundDriveStrategy.shouldUseRamming(
+                VehicleMovementType.WHEEL, true, false, false, true, false, false));
+    }
+
+    @Test
+    void armedDriverWithAmmoDoesNotRamWhenOtherWeaponsAreEmpty() {
+        assertFalse(GroundDriveStrategy.shouldUseRamming(
+                VehicleMovementType.TRACK, true, true, true, true, true, false));
+    }
+
+    @Test
+    void unarmedDriverWithoutGunnerDoesNotNeedVehicleAmmo() {
+        assertTrue(GroundDriveStrategy.shouldUseRamming(
+                VehicleMovementType.WHEEL, true, false, false, false, true, true));
+        assertTrue(GroundDriveStrategy.shouldUseRamming(
+                VehicleMovementType.WHEEL, true, false, false, false, true, false));
+    }
+
+    @Test
     void rammingDisabledForNonGroundMovementTypes() {
         assertFalse(GroundDriveStrategy.shouldUseRamming(
                 VehicleMovementType.HELICOPTER,

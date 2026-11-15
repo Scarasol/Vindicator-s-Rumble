@@ -25,6 +25,8 @@ public final class GroundDriveProfile {
     private static final Map<String, List<Long>> SAMPLES = new LinkedHashMap<>();
     private static final ThreadLocal<Deque<Sample>> ACTIVE = ThreadLocal.withInitial(ArrayDeque::new);
     private static long directRamChecks;
+    private static long ramSeatQueries;
+    private static long ramAmmoQueries;
     private static final Set<Segment> SEGMENTS = new HashSet<>();
     private static long duplicateSegments;
 
@@ -43,6 +45,14 @@ public final class GroundDriveProfile {
 
     public static void directRamCheck() {
         directRamChecks++;
+    }
+
+    public static void ramSeatQuery() {
+        ramSeatQueries++;
+    }
+
+    public static void ramAmmoQuery() {
+        ramAmmoQueries++;
     }
 
     public static void corridor(CollisionGetter level, Entity entity, Vec3 from, Vec3 to, VehicleDimensions dimensions) {
@@ -67,6 +77,7 @@ public final class GroundDriveProfile {
         });
         LogUtils.getLogger().info("Ground drive work directRamChecks={} duplicateSegments={}",
                 directRamChecks, duplicateSegments);
+        LogUtils.getLogger().info("Ground ram work seatQueries={} ammoQueries={}", ramSeatQueries, ramAmmoQueries);
     }
 
     private static double percentile(long[] sorted, double fraction) {

@@ -72,6 +72,12 @@ public final class VehicleNavigationIsolationGameTests {
                     "Vehicle integration took the wrong ownership of the vanilla navigation path");
             helper.assertTrue(accepted == (vanillaOwnsPath || !controller.supportsFlightControl()),
                     "Navigation acceptance did not match the owning movement family");
+            helper.assertTrue(passenger.getNavigation().isInProgress() == accepted
+                            && passenger.getNavigation().isDone() != accepted,
+                    "Navigation status did not reflect the accepted native or delegated path");
+            passenger.getNavigation().stop();
+            helper.assertTrue(passenger.getNavigation().isDone() && !passenger.getNavigation().isInProgress(),
+                    "Stopping navigation left an active native or delegated path");
         } finally {
             passenger.discard();
             vehicle.discard();

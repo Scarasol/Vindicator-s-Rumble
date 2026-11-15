@@ -567,11 +567,16 @@ public final class VehicleSmokeGameTests {
     }
 
     @GameTest(batch = "smoke_toggle", template = "empty", timeoutTicks = 100)
-    public static void masterSwitchCancelsQueuedAiSmoke(GameTestHelper helper) {
+    public static void masterSwitchKeepsQueuedSmokeForAnExistingAiDriver(GameTestHelper helper) {
         ready(helper, fixture -> {
             fixture.whenSmokeQueued(() -> CommonConfig.ENABLE_VEHICLE_AI.set(false));
             fixture.report(VehicleThreats.Stage.LOCKED, 30);
-            fixture.expectCancelledSmoke(helper);
+            helper.runAfterDelay(8, () -> {
+                helper.assertTrue(fixture.queueObserved && !CommonConfig.ENABLE_VEHICLE_AI.get(),
+                        "Fixture did not disable the master switch after queuing smoke");
+                fixture.assertVolley(helper);
+                fixture.finish(helper);
+            });
         });
     }
 

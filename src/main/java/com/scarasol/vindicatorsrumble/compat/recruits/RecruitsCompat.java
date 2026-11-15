@@ -3,8 +3,6 @@ package com.scarasol.vindicatorsrumble.compat.recruits;
 import com.scarasol.vindicatorsrumble.api.vehicle.DriveRequest;
 import com.scarasol.vindicatorsrumble.api.vehicle.VehicleController;
 import com.scarasol.vindicatorsrumble.compat.VehicleControllers;
-import com.scarasol.vindicatorsrumble.config.CommonConfig;
-import com.scarasol.vindicatorsrumble.init.ModTags;
 import com.scarasol.vindicatorsrumble.util.VehicleAiMemory;
 import com.scarasol.vindicatorsrumble.util.VehicleAiTuning;
 import com.talhanation.recruits.entities.AbstractRecruitEntity;
@@ -46,8 +44,7 @@ public final class RecruitsCompat {
     }
 
     public static boolean usesVehicleNavigation(AbstractRecruitEntity recruit) {
-        return CommonConfig.ENABLE_VEHICLE_AI.get()
-                && recruit.getType().is(ModTags.EntityTypes.VEHICLE_AI_USERS)
+        return VehicleAiMemory.isVehicleAiEnabled(recruit)
                 && VehicleControllers.forMob(recruit)
                 .filter(controller -> controller.isValid()
                         && (controller.usesGroundNavigation() || controller.supportsFlightControl())).isPresent();
@@ -102,14 +99,14 @@ public final class RecruitsCompat {
                                               UUID group, boolean shouldFire) {
         if (recruit.level().isClientSide() || !owner.equals(player.getUUID())
                 || !recruit.isEffectedByCommand(owner, group)
-                || !recruit.getType().is(ModTags.EntityTypes.VEHICLE_AI_USERS)) {
+                || !VehicleAiMemory.isVehicleAiEnabled(recruit)) {
             return;
         }
         if (!shouldFire) {
             cancelCommand(recruit);
             return;
         }
-        if (!CommonConfig.ENABLE_VEHICLE_AI.get() || VehicleControllers.forMob(recruit).isEmpty()) {
+        if (VehicleControllers.forMob(recruit).isEmpty()) {
             recruit.getPersistentData().remove(STRATEGIC_FIRE);
             releaseTarget(recruit);
             return;
@@ -142,7 +139,7 @@ public final class RecruitsCompat {
             releaseTarget(recruit);
             return;
         }
-        if (!CommonConfig.ENABLE_VEHICLE_AI.get() || !command.hasUUID("Owner")
+        if (!VehicleAiMemory.isVehicleAiEnabled(recruit) || !command.hasUUID("Owner")
                 || !recruit.isEffectedByCommand(command.getUUID("Owner"),
                 command.hasUUID("Group") ? command.getUUID("Group") : null)
                 || !nativeStrategicFireEnabled(recruit)) {
@@ -193,7 +190,7 @@ public final class RecruitsCompat {
             return;
         }
         ArmorStand target = STRATEGIC_TARGETS.get(recruit);
-        if (CommonConfig.ENABLE_VEHICLE_AI.get() && recruit.isPassenger()
+        if (VehicleAiMemory.isVehicleAiEnabled(recruit) && recruit.isPassenger()
                 && VehicleAiTuning.isValidCombatTarget(recruit, target)) {
             event.setNewTarget(target);
         }

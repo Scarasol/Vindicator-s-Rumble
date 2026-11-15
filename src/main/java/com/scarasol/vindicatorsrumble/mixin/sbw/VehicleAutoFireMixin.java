@@ -4,7 +4,6 @@ import com.atsuishio.superbwarfare.entity.vehicle.base.VehicleEntity;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import com.scarasol.vindicatorsrumble.compat.sbw.SbwVehicleController;
-import com.scarasol.vindicatorsrumble.init.ModTags;
 import com.scarasol.vindicatorsrumble.util.VehicleAiMemory;
 import com.scarasol.vindicatorsrumble.util.VehicleAiTuning;
 import net.minecraft.world.entity.LivingEntity;
@@ -30,7 +29,7 @@ public abstract class VehicleAutoFireMixin {
             )
     )
     private void vindicatorsRumble$blockInvalidAiPassengerAutoFire(VehicleEntity vehicle, LivingEntity shooter, UUID targetUuid, Vec3 targetPos, Operation<Void> original) {
-        if (!(shooter instanceof Mob mob) || !mob.getType().is(ModTags.EntityTypes.VEHICLE_AI_USERS)) {
+        if (!(shooter instanceof Mob mob) || !VehicleAiMemory.isVehicleAiEnabled(mob)) {
             original.call(vehicle, shooter, targetUuid, targetPos);
             return;
         }
@@ -89,7 +88,7 @@ public abstract class VehicleAutoFireMixin {
     }
 
     private boolean vindicatorsRumble$shouldBlockAiShot(VehicleEntity vehicle, LivingEntity shooter) {
-        if (!(shooter instanceof Mob mob) || !mob.getType().is(ModTags.EntityTypes.VEHICLE_AI_USERS)) {
+        if (!(shooter instanceof Mob mob) || !VehicleAiMemory.isVehicleAiEnabled(mob)) {
             return false;
         }
 

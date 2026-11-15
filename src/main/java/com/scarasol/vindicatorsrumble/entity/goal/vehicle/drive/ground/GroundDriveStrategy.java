@@ -219,6 +219,10 @@ public final class GroundDriveStrategy implements DriveStrategy {
             return;
         }
 
+        if (this.state != State.RECOVER && this.tickInfantryFireWindowHold(request)) {
+            return;
+        }
+
         this.updateStuckState(request);
         if (this.state == State.MANEUVER) {
             this.tickManeuver(request);
@@ -496,15 +500,18 @@ public final class GroundDriveStrategy implements DriveStrategy {
         }
         VehicleMovementType movementType = this.controller.movementType();
         Optional<SeatHandle> currentSeat = this.controller.seatOf(this.mob);
-        List<SeatHandle> seats = this.controller.seats();
         boolean currentSeatCanDrive = currentSeat.map(SeatHandle::canDrive).orElse(false);
+        if (!currentSeatCanDrive || (movementType != VehicleMovementType.WHEEL && movementType != VehicleMovementType.TRACK)) {
+            return false;
+        }
         boolean currentSeatHasWeapon = currentSeat.map(SeatHandle::hasWeapon).orElse(false);
-        boolean occupiedWeaponSeat = seats.stream()
-                .filter(SeatHandle::hasWeapon)
-                .anyMatch(SeatHandle::occupied);
+        // An armed driver already settles this branch; an unarmed solo driver has no gunner to check.
+        boolean occupiedWeaponSeat = currentSeatHasWeapon || (this.controller.passengers().size() > 1
+                && this.controller.seats().stream().anyMatch(seat -> seat.hasWeapon() && seat.occupied()));
         boolean ammoConsumptionEnabled = CommonConfig.VEHICLE_AI_NEEDS_AMMO.get();
         boolean currentSeatHasUsableWeapon = this.currentSeatHasUsableWeapon(currentSeatHasWeapon, ammoConsumptionEnabled);
-        boolean hasAnyVehicleWeaponAmmo = this.controller.hasAnyWeaponAmmo(this.mob);
+        boolean needsVehicleAmmoCheck = ammoConsumptionEnabled && !currentSeatHasWeapon && occupiedWeaponSeat;
+        boolean hasAnyVehicleWeaponAmmo = !needsVehicleAmmoCheck || this.controller.hasAnyWeaponAmmo(this.mob);
         boolean result = shouldUseRamming(
                 movementType,
                 currentSeatCanDrive,
@@ -513,6 +520,11 @@ public final class GroundDriveStrategy implements DriveStrategy {
                 occupiedWeaponSeat,
                 ammoConsumptionEnabled,
                 hasAnyVehicleWeaponAmmo);
+        LivingEntity target = result ? this.validCombatTarget() : null;
+        if (target != null && target.getVehicle() == null
+                && this.hasCurrentVehicleFireWindow(target) && this.hasFireWindowLineOfSight(target)) {
+            result = false;
+        }
         VehicleAiLogger.debugEvery(this.mob, 40,
                 "Ram eligibility movement={} seatPresent={} canDrive={} seatWeapon={} currentSeatUsableWeapon={} occupiedWeaponSeat={} ammoRequired={} hasAnyVehicleWeaponAmmo={} result={}",
                 movementType,
@@ -522,7 +534,7 @@ public final class GroundDriveStrategy implements DriveStrategy {
                 currentSeatHasUsableWeapon,
                 occupiedWeaponSeat,
                 ammoConsumptionEnabled,
-                hasAnyVehicleWeaponAmmo,
+                needsVehicleAmmoCheck ? hasAnyVehicleWeaponAmmo : "not_checked",
                 result);
         return result;
     }
@@ -1298,6 +1310,24 @@ public final class GroundDriveStrategy implements DriveStrategy {
                 && GroundSteering.shouldBrake(this.controller);
     }
 
+    private boolean tickInfantryFireWindowHold(DriveRequest request) {
+        if (!isTargetDistanceIntent(request.intent()) || request.desiredDistance() <= 0.0D) {
+            return false;
+        }
+        Entity target = request.targetEntity().orElse(null);
+        if (target == null || !target.isAlive() || target.getVehicle() != null) {
+            return false;
+        }
+        double distanceSqr = this.horizontalDistanceSqr(this.controller.position(), target.position());
+        if (!shouldRetreatFromChase(distanceSqr, request.desiredDistance(),
+                VehicleAiTuning.chaseStartDistance(this.mob), this.retreatingFromTarget)
+                || !this.hasCurrentVehicleFireWindow(target) || !this.hasFireWindowLineOfSight(target)) {
+            return false;
+        }
+        this.beginFireWindowHold(target);
+        return true;
+    }
+
     private boolean tickRetreatFromTarget(DriveRequest request) {
         if (!isTargetDistanceIntent(request.intent()) || request.targetEntity().isEmpty() || request.desiredDistance() <= 0.0D) {
             this.retreatingFromTarget = false;
@@ -1310,6 +1340,11 @@ public final class GroundDriveStrategy implements DriveStrategy {
             this.retreatingFromTarget = false;
             this.closingToTarget = false;
             this.clearFireWindowHold();
+            return false;
+        }
+        if (target.getVehicle() == null && this.canUseGroundRamMovement()) {
+            // Infantry proximity must not restart distance retreat after braking.
+            this.retreatingFromTarget = false;
             return false;
         }
 
@@ -1385,14 +1420,7 @@ public final class GroundDriveStrategy implements DriveStrategy {
             }
             this.path = null;
             if (fireWindow && lineOfSight) {
-                this.retreatBlockedRamTicks = 0;
-                this.beginFireWindowHold(target, clearance);
-                VehicleInput brakeInput = GroundSteering.brake(this.controller);
-                if (brakeInput.equals(VehicleInput.NONE)) {
-                    this.controller.stopDriving(this.mob);
-                } else {
-                    this.controller.drive(this.mob, brakeInput);
-                }
+                this.beginFireWindowHold(target);
                 return true;
             }
             if (target.getVehicle() == null && this.canUseGroundRamMovement()) {
@@ -2116,15 +2144,28 @@ public final class GroundDriveStrategy implements DriveStrategy {
         return fireWindowHoldTicks > 0;
     }
 
-    private void beginFireWindowHold(Entity target, GroundClearance clearance) {
+    private void beginFireWindowHold(Entity target) {
         this.fireWindowHoldTicks = FIRE_WINDOW_HOLD_TICKS;
+        this.retreatBlockedRamTicks = 0;
+        this.retreatingFromTarget = false;
+        this.closingToTarget = false;
+        this.brakingChaseBand = false;
         this.stuckTicks = 0;
         this.lastPosition = this.controller.position();
-        VehicleAiLogger.debugEvery(this.mob, 5,
-                "Drive fire-window hold target={} ticks={} clearance={} velocity={}",
+        this.path = null;
+        this.state = State.IDLE;
+        this.turnDirection = 0;
+        this.resetManeuver(this.lastPosition);
+        VehicleInput brakeInput = GroundSteering.brake(this.controller);
+        if (brakeInput.equals(VehicleInput.NONE)) {
+            this.controller.stopDriving(this.mob);
+        } else {
+            this.controller.drive(this.mob, brakeInput);
+        }
+        VehicleAiLogger.debugEvery(this.mob, 20,
+                "Drive fire-window hold target={} ticks={} velocity={}",
                 target.getId(),
                 this.fireWindowHoldTicks,
-                clearance,
                 this.controller.velocity());
     }
 

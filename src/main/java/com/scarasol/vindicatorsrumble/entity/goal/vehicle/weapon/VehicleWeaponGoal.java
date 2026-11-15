@@ -10,7 +10,6 @@ import com.scarasol.vindicatorsrumble.api.vehicle.WeaponFireWindow;
 import com.scarasol.vindicatorsrumble.api.vehicle.WeaponHandle;
 import com.scarasol.vindicatorsrumble.api.vehicle.WeaponStatus;
 import com.scarasol.vindicatorsrumble.compat.VehicleControllers;
-import com.scarasol.vindicatorsrumble.config.CommonConfig;
 import com.scarasol.vindicatorsrumble.entity.goal.vehicle.common.VehicleAiGoal;
 import com.scarasol.vindicatorsrumble.util.AllegianceUtil;
 import com.scarasol.vindicatorsrumble.util.VehicleAiLogger;
@@ -53,7 +52,7 @@ public class VehicleWeaponGoal extends Goal implements VehicleAiGoal {
 
     @Override
     public boolean canUse() {
-        if (!CommonConfig.ENABLE_VEHICLE_AI.get()) {
+        if (!VehicleAiMemory.isVehicleAiEnabled(this.mob)) {
             VehicleAiLogger.debugEvery(this.mob, 40, "Weapon canUse=false: vehicle AI disabled");
             return false;
         }
@@ -388,6 +387,7 @@ public class VehicleWeaponGoal extends Goal implements VehicleAiGoal {
         WeaponEvaluation best = null;
         int bestScore = Integer.MAX_VALUE;
         boolean preferHeavy = prefersHeavyWeapon(target);
+        boolean preferLoadedWeapon = this.controller.usesGroundNavigation() && target.getVehicle() == null;
         for (WeaponHandle weapon : weapons) {
             WeaponStatus status = this.controller.weaponStatus(this.mob, weapon);
             if (!isSelectableWeaponStatus(status)) {
@@ -399,6 +399,10 @@ public class VehicleWeaponGoal extends Goal implements VehicleAiGoal {
                 continue;
             }
             int score = selectionScore(weapon, status, window, preferHeavy, this.selectedWeapon);
+            // Use another loaded weapon before falling back to a ram; ordinary shot cadence is not a reload.
+            if (preferLoadedWeapon && (status.needsReload() || status.reloading())) {
+                score += 100_000;
+            }
             if (score < bestScore) {
                 bestScore = score;
                 best = new WeaponEvaluation(weapon, status, aimPoint, window);

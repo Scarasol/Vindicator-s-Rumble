@@ -9,15 +9,31 @@ import net.minecraft.world.entity.Mob;
 import net.minecraft.world.level.Level;
 
 import java.util.HashMap;
+import java.util.Collections;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.WeakHashMap;
 
 public class VehicleAiMemory {
     private static final Map<Level, Memory> LEVELS = new WeakHashMap<>();
+
+    public static void setVehicleAiEnabled(Mob mob, boolean enabled) {
+        if (enabled) {
+            memory(mob.level()).vehicleAiUsers.add(mob);
+        } else {
+            Memory memory = LEVELS.get(mob.level());
+            if (memory != null) memory.vehicleAiUsers.remove(mob);
+        }
+    }
+
+    public static boolean isVehicleAiEnabled(Mob mob) {
+        Memory memory = LEVELS.get(mob.level());
+        return memory != null && memory.vehicleAiUsers.contains(mob);
+    }
 
     public static void setDriveRequest(Mob mob, DriveRequest request, int ttlTicks) {
         memory(mob.level()).driveRequests.put(mob.getUUID(), new Timed<>(request, mob.level().getGameTime() + ttlTicks));
@@ -174,6 +190,8 @@ public class VehicleAiMemory {
     }
 
     private static final class Memory {
+        // Admission is sampled on entity load, not cleared with tactical or mounted state.
+        final Set<Mob> vehicleAiUsers = Collections.newSetFromMap(new WeakHashMap<>());
         final Map<UUID, Timed<DriveRequest>> driveRequests = new HashMap<>();
         final Map<UUID, Timed<DriveRequest>> vehicleDriveRequests = new HashMap<>();
         final Map<UUID, DriveRequest> navigationRequests = new HashMap<>();

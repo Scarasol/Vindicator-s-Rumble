@@ -9,6 +9,8 @@ import com.atsuishio.superbwarfare.entity.projectile.SmokeDecoyEntity;
 import com.atsuishio.superbwarfare.init.ModEntities;
 import com.atsuishio.superbwarfare.init.ModDamageTypes;
 import com.atsuishio.superbwarfare.init.ModItems;
+import com.atsuishio.superbwarfare.tools.InventoryTool;
+import com.atsuishio.superbwarfare.tools.OBB;
 import net.minecraft.world.entity.LivingEntity;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -16,6 +18,7 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.item.ItemStack;
 import net.minecraftforge.registries.ForgeRegistries;
 
@@ -93,6 +96,15 @@ public final class SbwGameTestVehicle {
 
     public static int decoyStock(Entity entity) {
         return ((VehicleEntity) entity).getDecoyCount();
+    }
+
+    public static boolean hasCreativeVehicleAmmo(Entity entity) {
+        return InventoryTool.hasCreativeAmmoBoxForVehicle((VehicleEntity) entity);
+    }
+
+    public static AABB physicalCollisionBounds(Entity entity) {
+        var collision = ((VehicleEntity) entity).getCollisionOBB();
+        return collision == null ? entity.getBoundingBox() : OBB.getWorldAABB(collision);
     }
 
     public static boolean hasDecoyInput(Entity entity) {
@@ -247,6 +259,60 @@ public final class SbwGameTestVehicle {
             throw new IllegalArgumentException("Not an SBW vehicle: " + entity.getType());
         }
         return vehicle.changeSeat(passenger, seat);
+    }
+
+    public static void prepareContinuousGroundFire(Entity entity, boolean slowCadence) {
+        VehicleEntity vehicle = (VehicleEntity) entity;
+        for (int slot = 0; slot < vehicle.getContainerSize(); slot++) {
+            vehicle.setItem(slot, ItemStack.EMPTY);
+        }
+        for (String weapon : List.copyOf(vehicle.getGunDataMap().keySet())) {
+            vehicle.modifyGunData(weapon, data -> {
+                JsonObject properties = new JsonObject();
+                properties.addProperty("Magazine", 4096);
+                properties.addProperty("HeatPerShoot", 0);
+                if (slowCadence) properties.addProperty("RPM", 30);
+                data.propertyOverrideString.set(properties.toString());
+                data.resetStatus();
+                data.ammo.set(4096);
+                data.virtualAmmo.set(4096);
+                data.heat.set(0.0D);
+                data.overHeat.set(false);
+            });
+        }
+        vehicle.setEnergy(vehicle.getMaxEnergy());
+    }
+
+    public static void setGroundWeaponCondition(Entity entity, LivingEntity occupant, int weaponId,
+                                                GroundWeaponCondition condition) {
+        VehicleEntity vehicle = (VehicleEntity) entity;
+        int seat = vehicle.getSeatIndex(occupant);
+        vehicle.modifyGunData(seat, weaponId, data -> {
+            String override = data.propertyOverrideString.get();
+            JsonObject properties = override.isBlank() ? new JsonObject()
+                    : JsonParser.parseString(override).getAsJsonObject();
+            properties.addProperty("EmptyReloadTime", 400);
+            properties.addProperty("NaturalCooldown", 0);
+            data.propertyOverrideString.set(properties.toString());
+            data.resetStatus();
+            if (condition == GroundWeaponCondition.RELOADING) {
+                data.ammo.set(0);
+                data.startReload();
+            } else if (condition == GroundWeaponCondition.OVERHEATED) {
+                data.heat.set(100.0D);
+                data.overHeat.set(true);
+            } else {
+                data.ammo.set(0);
+                data.virtualAmmo.set(0);
+                data.backupAmmoCount.set(0);
+            }
+        });
+    }
+
+    public enum GroundWeaponCondition {
+        RELOADING,
+        OVERHEATED,
+        EMPTY
     }
 
     public record FlightControl(float mouseX, float mouseY, float deltaRot, float rotor,

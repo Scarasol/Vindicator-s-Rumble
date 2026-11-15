@@ -25,6 +25,7 @@ public class CommonConfig {
     public static final ForgeConfigSpec.DoubleValue SMOKE_LOW_HEALTH_RATIO;
     public static final ForgeConfigSpec.DoubleValue VINDICATOR_RAID_VEHICLE_CHANCE;
     public static final ForgeConfigSpec.ConfigValue<Integer> VINDICATOR_RAID_MIN_BAD_OMEN_LEVEL;
+    public static final ForgeConfigSpec.IntValue VINDICATOR_RAID_MIN_WAVE;
     public static final ForgeConfigSpec.ConfigValue<List<? extends String>> VINDICATOR_RAID_VEHICLE_TYPES;
     public static final ForgeConfigSpec.DoubleValue VILLAGE_DEFENDER_VEHICLE_CHANCE;
     public static final ForgeConfigSpec.ConfigValue<List<? extends String>> VILLAGE_DEFENDER_VEHICLE_TYPES;
@@ -35,7 +36,7 @@ public class CommonConfig {
 
     static {
         BUILDER.push("Vehicle AI");
-        ENABLE_VEHICLE_AI = BUILDER.comment("Whether tagged mobs receive vehicle AI goals.")
+        ENABLE_VEHICLE_AI = BUILDER.comment("Whether tagged mobs receive vehicle AI when spawned or loaded. Runtime changes do not reconfigure already loaded mobs; entity reload or server restart uses the current setting.")
                 .define("Enable Vehicle AI", true);
         VEHICLE_AI_NEEDS_FUEL = BUILDER.comment("Whether vehicle AI must satisfy vehicle fuel or energy requirements when driving.")
                 .define("Vehicle AI Needs Fuel", false);
@@ -45,7 +46,7 @@ public class CommonConfig {
                 .define("Strict Player Alliance", true);
         FRIENDLY_TAG = BUILDER.comment("Entity type tag IDs whose members are treated as allies for vehicle ownership and firing checks.")
                 .defineList("Friendly Tag", ArrayList::new, element -> element instanceof String);
-        VEHICLE_TARGET_RANGE = BUILDER.comment("Target acquisition follow range used by tagged mobs while riding a controllable vehicle.")
+        VEHICLE_TARGET_RANGE = BUILDER.comment("Target acquisition follow range sampled when entering a controllable vehicle, refreshed on remount, and removed on dismount.")
                 .defineInRange("Vehicle Target Range", 64.0D, 1.0D, 256.0D);
         VEHICLE_PATH_REPLAN_INTERVAL = BUILDER.comment("Ticks between normal vehicle path replans.")
                 .defineInRange("Vehicle Path Replan Interval", 20, 1, 200);
@@ -65,6 +66,8 @@ public class CommonConfig {
                 .defineInRange("Vindicator Raid Vehicle Chance", 0.05D, 0.0D, 1.0D);
         VINDICATOR_RAID_MIN_BAD_OMEN_LEVEL = BUILDER.comment("Minimum raid Bad Omen level required before raid Vindicators can spawn vehicles.")
                 .defineInRange("Vindicator Raid Minimum Bad Omen Level", 4, 0, 5);
+        VINDICATOR_RAID_MIN_WAVE = BUILDER.comment("First raid wave whose Vindicators may spawn vehicles. Waves start at 1; Bad Omen and vehicle chance requirements still apply.")
+                .defineInRange("Vindicator Raid Minimum Wave", 2, 1, Integer.MAX_VALUE);
         VINDICATOR_RAID_VEHICLE_TYPES = BUILDER.comment("""
                 Vehicle entity type IDs and their weights for eligible raid Vindicators, patrol members, and ordinary spawns of vehicle_ai_users.
                 Format: "superbwarfare:sodayo_pick_up_hmg, 5" means this vehicle has a spawn weight of 5.

@@ -1,8 +1,8 @@
 package com.scarasol.vindicatorsrumble.util;
 
+import com.scarasol.vindicatorsrumble.api.vehicle.DriveIntent;
 import com.scarasol.vindicatorsrumble.api.vehicle.VehicleController;
 import com.scarasol.vindicatorsrumble.compat.VehicleControllers;
-import com.scarasol.vindicatorsrumble.init.ModTags;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
@@ -22,6 +22,16 @@ public class VehicleAiTuning {
         return controller.usesGroundNavigation() && requestedDistance > 0.0D
                 ? Math.max(requestedDistance, controller.horizontalFootprintRadius() + 1.0D)
                 : requestedDistance;
+    }
+
+    public static boolean isDelegatingGroundNavigation(Mob mob) {
+        return mob.isPassenger()
+                && VehicleAiMemory.isVehicleAiEnabled(mob)
+                && VehicleAiMemory.getNavigationDriveRequest(mob).intent() != DriveIntent.NONE
+                && VehicleControllers.forMob(mob)
+                .filter(VehicleController::isValid)
+                .filter(controller -> controller.canDrive(mob) && controller.usesGroundNavigation())
+                .isPresent();
     }
 
     public static double chaseDistance(Mob mob) {
@@ -74,7 +84,7 @@ public class VehicleAiTuning {
 
     public static boolean usesHorizontalTargetRange(Mob mob) {
         return mob.isPassenger()
-                && mob.getType().is(ModTags.EntityTypes.VEHICLE_AI_USERS)
+                && VehicleAiMemory.isVehicleAiEnabled(mob)
                 && VehicleControllers.forMob(mob)
                 .map(controller -> controller.supportsFlightControl())
                 .orElse(false);

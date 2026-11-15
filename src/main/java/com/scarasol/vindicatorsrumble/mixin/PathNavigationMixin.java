@@ -1,10 +1,10 @@
 package com.scarasol.vindicatorsrumble.mixin;
 
+import com.scarasol.vindicatorsrumble.api.vehicle.DriveIntent;
 import com.scarasol.vindicatorsrumble.api.vehicle.DriveRequest;
 import com.scarasol.vindicatorsrumble.api.vehicle.VehicleController;
 import com.scarasol.vindicatorsrumble.compat.VehicleControllers;
 import com.scarasol.vindicatorsrumble.config.CommonConfig;
-import com.scarasol.vindicatorsrumble.init.ModTags;
 import com.scarasol.vindicatorsrumble.util.VehicleAiLogger;
 import com.scarasol.vindicatorsrumble.util.VehicleAiMemory;
 import com.scarasol.vindicatorsrumble.util.VehicleAiTuning;
@@ -148,13 +148,20 @@ public abstract class PathNavigationMixin {
         cir.setReturnValue(true);
     }
 
+    @Inject(method = "isDone", at = @At("HEAD"), cancellable = true)
+    private void vindicatorsRumble$reportDelegatedNavigation(CallbackInfoReturnable<Boolean> cir) {
+        if (VehicleAiTuning.isDelegatingGroundNavigation(this.mob)) {
+            cir.setReturnValue(false);
+        }
+    }
+
     @Inject(method = "stop", at = @At("HEAD"))
     private void vindicatorsRumble$clearVehicleNavigation(CallbackInfo ci) {
         if (this.mob.isPassenger()
-                && this.mob.getType().is(ModTags.EntityTypes.VEHICLE_AI_USERS)) {
+                && VehicleAiMemory.isVehicleAiEnabled(this.mob)) {
             DriveRequest request = VehicleAiMemory.getNavigationDriveRequest(this.mob);
             if (VehicleAiLogger.isDebugEnabled()
-                    && request.intent() != com.scarasol.vindicatorsrumble.api.vehicle.DriveIntent.NONE) {
+                    && request.intent() != DriveIntent.NONE) {
                 VehicleAiLogger.debug(this.mob,
                         "Clearing vehicle navigation request due PathNavigation.stop intent={} targetPos={} targetEntity={} pathNodes={}",
                         request.intent(),
@@ -168,8 +175,7 @@ public abstract class PathNavigationMixin {
 
     @Unique
     private Optional<VehicleController> vindicatorsRumble$vehicleController() {
-        if (!CommonConfig.ENABLE_VEHICLE_AI.get() || !this.mob.isPassenger()
-                || !this.mob.getType().is(ModTags.EntityTypes.VEHICLE_AI_USERS)) {
+        if (!this.mob.isPassenger() || !VehicleAiMemory.isVehicleAiEnabled(this.mob)) {
             return Optional.empty();
         }
         return VehicleControllers.forMob(this.mob).filter(VehicleController::isValid);

@@ -2,7 +2,6 @@ package com.scarasol.vindicatorsrumble.entity.goal.vehicle.leave;
 
 import com.scarasol.vindicatorsrumble.api.vehicle.VehicleController;
 import com.scarasol.vindicatorsrumble.compat.VehicleControllers;
-import com.scarasol.vindicatorsrumble.config.CommonConfig;
 import com.scarasol.vindicatorsrumble.entity.goal.vehicle.common.VehicleAiGoal;
 import com.scarasol.vindicatorsrumble.util.AllegianceUtil;
 import com.scarasol.vindicatorsrumble.util.VehicleAiLogger;
@@ -26,7 +25,7 @@ public class LeaveVehicleGoal extends Goal implements VehicleAiGoal {
 
     @Override
     public boolean canUse() {
-        if (!CommonConfig.ENABLE_VEHICLE_AI.get() || !this.mob.isPassenger()) {
+        if (!VehicleAiMemory.isVehicleAiEnabled(this.mob) || !this.mob.isPassenger()) {
             return false;
         }
         Optional<VehicleController> current = VehicleControllers.forMob(this.mob);

@@ -178,6 +178,31 @@ class VehicleWeaponGoalTest {
     }
 
     @Test
+    void fireWindowHoldIgnoresCadenceButRejectsReloadHeatAndEmptyWeapons() {
+        WeaponHandle weapon = new WeaponHandle(0, "turret", 0.0D, 96.0D, 0,
+                WeaponAimMode.INDEPENDENT, WeaponPayloadType.BULLET);
+        WeaponFireWindow window = WeaponFireWindow.inWindow(0.0D, 0.0D, 0.0D);
+        List<WeaponStatus> usable = List.of(WeaponStatus.READY,
+                new WeaponStatus(true, false, false, false, false, true, 0));
+        for (WeaponStatus status : usable) {
+            CurrentWeaponSnapshot snapshot = CurrentWeaponSnapshot.of(UUID.randomUUID(), 4, 0,
+                    UUID.randomUUID(), 9, weapon, status, 0.25D, window);
+            assertFalse(snapshot.fireReady());
+            assertTrue(snapshot.canHoldCurrentFireWindow());
+        }
+        List<WeaponStatus> unavailable = List.of(
+                new WeaponStatus(true, false, true, false, false, true, 0),
+                new WeaponStatus(true, false, false, true, false, true, 0),
+                new WeaponStatus(true, false, false, false, true, true, 100),
+                new WeaponStatus(true, false, false, false, false, false, 0),
+                new WeaponStatus(false, true, false, false, false, true, 0));
+        for (WeaponStatus status : unavailable) {
+            assertFalse(CurrentWeaponSnapshot.of(UUID.randomUUID(), 4, 0,
+                    UUID.randomUUID(), 9, weapon, status, 1.0D, window).canHoldCurrentFireWindow());
+        }
+    }
+
+    @Test
     void currentWeaponSnapshotMatchesVehicleSeatAndTargetContext() {
         UUID vehicle = UUID.randomUUID();
         UUID target = UUID.randomUUID();

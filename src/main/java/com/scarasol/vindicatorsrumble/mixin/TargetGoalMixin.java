@@ -4,7 +4,7 @@ import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import com.scarasol.vindicatorsrumble.api.vehicle.VehicleMovementType;
 import com.scarasol.vindicatorsrumble.compat.VehicleControllers;
-import com.scarasol.vindicatorsrumble.init.ModTags;
+import com.scarasol.vindicatorsrumble.util.VehicleAiMemory;
 import com.scarasol.vindicatorsrumble.util.VehicleAiTuning;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.Mob;
@@ -33,7 +33,7 @@ public abstract class TargetGoalMixin {
     )
     private int vindicatorsRumble$extendHelicopterUnseenMemory(TargetGoal goal, Operation<Integer> original) {
         int unseenMemoryTicks = original.call(goal);
-        if (!this.mob.isPassenger() || !this.mob.getType().is(ModTags.EntityTypes.VEHICLE_AI_USERS)) {
+        if (!this.mob.isPassenger() || !VehicleAiMemory.isVehicleAiEnabled(this.mob)) {
             return unseenMemoryTicks;
         }
         return VehicleControllers.forMob(this.mob)

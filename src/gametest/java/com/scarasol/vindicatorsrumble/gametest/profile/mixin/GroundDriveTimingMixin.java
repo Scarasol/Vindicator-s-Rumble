@@ -25,4 +25,28 @@ public abstract class GroundDriveTimingMixin {
     private void countDirectRam(Entity target, CallbackInfoReturnable<Boolean> callback) {
         GroundDriveProfile.directRamCheck();
     }
+
+    @Inject(method = "shouldUseRamming()Z", at = @At("HEAD"), remap = false)
+    private void beginRamEligibility(CallbackInfoReturnable<Boolean> callback) {
+        GroundDriveProfile.begin("ramEligibility");
+    }
+
+    @Inject(method = "shouldUseRamming()Z", at = @At("RETURN"), remap = false)
+    private void endRamEligibility(CallbackInfoReturnable<Boolean> callback) {
+        GroundDriveProfile.end();
+    }
+
+    @Inject(method = "shouldUseRamming()Z", at = @At(value = "INVOKE",
+            target = "Lcom/scarasol/vindicatorsrumble/api/vehicle/VehicleController;seats()Ljava/util/List;"),
+            remap = false)
+    private void countRamSeatQuery(CallbackInfoReturnable<Boolean> callback) {
+        GroundDriveProfile.ramSeatQuery();
+    }
+
+    @Inject(method = "shouldUseRamming()Z", at = @At(value = "INVOKE",
+            target = "Lcom/scarasol/vindicatorsrumble/api/vehicle/VehicleController;hasAnyWeaponAmmo(Lnet/minecraft/world/entity/Mob;)Z"),
+            remap = false)
+    private void countRamAmmoQuery(CallbackInfoReturnable<Boolean> callback) {
+        GroundDriveProfile.ramAmmoQuery();
+    }
 }

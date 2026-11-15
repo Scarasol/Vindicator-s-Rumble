@@ -177,14 +177,12 @@ public final class GroundContinuityGameTests {
         Entity vehicle = type.create(level);
         vehicle.moveTo(start.x, start.y, start.z, yaw, 0.0F);
         vehicle.setInvulnerable(true);
-        level.addFreshEntity(vehicle);
         Mob driver = EntityType.VINDICATOR.create(level);
         driver.moveTo(start.x, start.y, start.z, yaw, 0.0F);
         driver.setPersistenceRequired();
         driver.setInvulnerable(true);
         driver.getAttribute(Attributes.FOLLOW_RANGE).setBaseValue(64.0D);
         level.addFreshEntity(driver);
-        helper.assertTrue(VehicleControllers.create(vehicle).orElseThrow().mount(driver), "Invalid fixture: could not mount");
         Mob target = EntityType.VILLAGER.create(level);
         Vec3 destination = redirect
                 ? start.add(forward.scale(14.0D)).add(lateral.scale(24.0D * side))
@@ -213,10 +211,14 @@ public final class GroundContinuityGameTests {
         };
         helper.onEachTick(() -> {
             try {
-                helper.assertTrue(vehicle.isAlive() && driver.getVehicle() == vehicle, "Lost driver or vehicle");
+                helper.assertTrue(vehicle.isAlive(), "Lost vehicle");
                 if (readyAt[0] < 0) {
                     helper.assertTrue(helper.getTick() < 120, "Invalid fixture: no natural target acquisition");
                     if (driver.getTarget() != target) return;
+                    // Do not expose a drivable vehicle to idle wandering before natural acquisition.
+                    level.addFreshEntity(vehicle);
+                    helper.assertTrue(VehicleControllers.create(vehicle).orElseThrow().mount(driver),
+                            "Invalid fixture: could not mount");
                     helper.assertTrue(vehicle.position().distanceTo(start) < 1.0D, "Invalid fixture: moved before setup");
                     if (lane) {
                         for (int z = -8; z <= 44; z++) {
@@ -235,6 +237,7 @@ public final class GroundContinuityGameTests {
                     }
                     readyAt[0] = helper.getTick();
                 }
+                helper.assertTrue(driver.getVehicle() == vehicle, "Lost driver");
                 long elapsed = helper.getTick() - readyAt[0];
                 if (vehicle.horizontalCollision) {
                     collisions[0]++;

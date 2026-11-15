@@ -92,7 +92,9 @@ public class VehicleSpawnEventHandler {
             return false;
         }
         Raid raid = raider.getCurrentRaid();
-        return raid != null && raid.getBadOmenLevel() >= CommonConfig.VINDICATOR_RAID_MIN_BAD_OMEN_LEVEL.get();
+        return raid != null
+                && raider.getWave() >= CommonConfig.VINDICATOR_RAID_MIN_WAVE.get()
+                && raid.getBadOmenLevel() >= CommonConfig.VINDICATOR_RAID_MIN_BAD_OMEN_LEVEL.get();
     }
 
     private static boolean isVillageDefender(LivingEntity entity) {
@@ -179,7 +181,7 @@ public class VehicleSpawnEventHandler {
             if (position == null) {
                 continue;
             }
-            vehicle.moveTo(position.x, position.y, position.z, level.random.nextFloat() * 360.0F, 0.0F);
+            controller.placeGenerationCandidate(position, level.random.nextFloat() * 360.0F);
             double radius = controller.horizontalFootprintRadius();
             AABB clearance = vehicle.getBoundingBox().minmax(new AABB(
                     position.x - radius, vehicle.getBoundingBox().minY, position.z - radius,
