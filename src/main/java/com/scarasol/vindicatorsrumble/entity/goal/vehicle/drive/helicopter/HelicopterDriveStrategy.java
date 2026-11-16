@@ -4,7 +4,6 @@ import com.scarasol.vindicatorsrumble.api.vehicle.CurrentWeaponSnapshot;
 import com.scarasol.vindicatorsrumble.api.vehicle.DriveIntent;
 import com.scarasol.vindicatorsrumble.api.vehicle.DriveRequest;
 import com.scarasol.vindicatorsrumble.api.vehicle.VehicleController;
-import com.scarasol.vindicatorsrumble.api.vehicle.VehicleFlightInput;
 import com.scarasol.vindicatorsrumble.api.vehicle.VehicleMovementType;
 import com.scarasol.vindicatorsrumble.api.vehicle.VehicleThreats;
 import com.scarasol.vindicatorsrumble.api.vehicle.WeaponHandle;
@@ -15,9 +14,10 @@ import com.scarasol.vindicatorsrumble.entity.goal.vehicle.drive.DriveVehicleGoal
 import com.scarasol.vindicatorsrumble.util.VehicleAiLogger;
 import com.scarasol.vindicatorsrumble.util.VehicleAiMemory;
 import com.scarasol.vindicatorsrumble.util.VehicleAiTuning;
+import com.scarasol.vindicatorsrumble.util.VehicleSmokeDefense;
 import net.minecraft.world.entity.Entity;
-import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.raid.Raider;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.List;
@@ -36,6 +36,8 @@ public final class HelicopterDriveStrategy implements DriveStrategy {
     private int helicopterFixedAttackRecoveryTicks;
     private Vec3 idleHoverAnchor;
     private long nextDecoyTick;
+    private DriveRequest raidNavigation;
+    private Activation activation = Activation.DRIVE;
 
     public HelicopterDriveStrategy(Mob mob, DriveVehicleGoal.Mode mode) {
         this.mob = mob;
@@ -50,6 +52,7 @@ public final class HelicopterDriveStrategy implements DriveStrategy {
     @Override
     public boolean canUse(VehicleController controller, boolean starting) {
         this.controller = controller;
+        this.updateRaidNavigation();
         return this.isHelicopter(controller)
                 && this.shouldUseHelicopterDrive(starting);
     }
@@ -57,12 +60,14 @@ public final class HelicopterDriveStrategy implements DriveStrategy {
     @Override
     public boolean canContinueToUse(VehicleController controller) {
         this.controller = controller;
+        this.updateRaidNavigation();
         return this.isHelicopter(controller)
                 && this.shouldUseHelicopterDrive(false);
     }
 
     @Override
-    public void start(VehicleController controller) {
+    public void start(VehicleController controller, Activation activation) {
+        this.activation = activation;
         this.controller = controller;
         this.flightControl.reset();
         this.flightPlanner.reset();
@@ -75,7 +80,7 @@ public final class HelicopterDriveStrategy implements DriveStrategy {
     @Override
     public void stop(VehicleController controller) {
         this.controller = controller;
-        this.flightControl.reset();
+        this.flightControl.stop(this.mob, controller);
         this.flightPlanner.reset();
         this.helicopterFixedAttackActive = false;
         this.helicopterFixedAttackRecoveryTicks = 0;
@@ -91,20 +96,22 @@ public final class HelicopterDriveStrategy implements DriveStrategy {
                 this.finishFixedAttack();
             }
             VehicleAiLogger.debugEvery(this.mob, 40, "Helicopter drive holding recovery controls because vehicle {} is wrecked", controller.entity().getId());
-            controller.controlFlight(this.mob, HelicopterFlightControl.neutralInput());
+            this.flightControl.recover(this.mob, controller);
             return;
         }
 
-        DriveRequest request = this.currentDriveRequest();
+        DriveRequest request = this.activation == Activation.DEFENSE_ONLY
+                ? DriveRequest.NONE : this.currentDriveRequest();
         Vec3 navigationPoint = request.targetPosition().orElseGet(() ->
                 request.targetEntity().filter(Entity::isAlive).map(Entity::position).orElse(null));
-        Entity target = this.helicopterTarget(request);
+        Entity target = this.activation == Activation.DEFENSE_ONLY ? null : this.helicopterTarget(request);
+        boolean smoke = VehicleSmokeDefense.requestDeployment(this.mob, controller);
         if (target == null && navigationPoint == null && !this.helicopterNeedsStabilizing()) {
             if (this.helicopterFixedAttackActive) {
                 this.finishFixedAttack();
             }
             VehicleAiLogger.debugEvery(this.mob, 40, "Helicopter drive stopping: no target and no flight stabilization needed");
-            controller.stopDriving(this.mob);
+            this.flightControl.idle(this.mob, controller, smoke);
             return;
         }
 
@@ -163,7 +170,6 @@ public final class HelicopterDriveStrategy implements DriveStrategy {
         boolean decoy = threat != null && threat.stage() != VehicleThreats.Stage.ACQUIRING
                 && gameTime >= this.nextDecoyTick && controller.canDeployDecoy();
         if (decoy) this.nextDecoyTick = gameTime + DECOY_RELEASE_INTERVAL_TICKS;
-        VehicleFlightInput input = this.flightControl.command(aircraftState, plan.flightRequest(), environment, decoy);
         this.updateFixedAttackState(target, aircraftState, plan);
         if (VehicleAiLogger.shouldLog(this.mob, 20)) {
             double targetHorizontalDistance = target == null ? 0.0D
@@ -174,7 +180,7 @@ public final class HelicopterDriveStrategy implements DriveStrategy {
             boolean closing = target != null
                     && targetHorizontalDistance > combatDistance + HelicopterFlightPlanner.OUTER_COMBAT_TOLERANCE;
             VehicleAiLogger.debugEvery(this.mob, 20,
-                    "Helicopter flight tick={} phase={} target={} desired={} aim={} cruise={} stopAtDestination={} retreating={} closing={} stableFire={} fixedWeaponReady={} fixedWeaponAimed={} attackActive={} attackRecover={} targetH={} altitude={} pitch={} roll={} yaw={} hover={} power={} los={} frontBlocked={} elevatedFrontClear={} terrainY={} clearances=[front={},elevated={}] pressure={} airFirePressure={} threat={} input={}",
+                    "Helicopter flight tick={} phase={} target={} desired={} aim={} cruise={} stopAtDestination={} retreating={} closing={} stableFire={} fixedWeaponReady={} fixedWeaponAimed={} attackActive={} attackRecover={} targetH={} altitude={} pitch={} roll={} yaw={} hover={} power={} los={} frontBlocked={} elevatedFrontClear={} terrainY={} clearances=[front={},elevated={}] pressure={} airFirePressure={} threat={}",
                     this.mob.tickCount,
                     plan.phase(),
                     target == null ? -1 : target.getId(),
@@ -204,10 +210,9 @@ public final class HelicopterDriveStrategy implements DriveStrategy {
                     environment.elevatedFrontClearance(),
                     pressure == null ? -1 : pressure.getId(),
                     airFirePressure == null ? -1 : airFirePressure.getId(),
-                    threat == null ? null : threat.stage(),
-                    input);
+                    threat == null ? null : threat.stage());
         }
-        controller.controlFlight(this.mob, input);
+        this.flightControl.execute(this.mob, controller, aircraftState, plan, decoy || smoke);
     }
 
     private Entity approachingAirTarget(Entity target, HelicopterFlightPlanner.AircraftState state) {
@@ -247,8 +252,8 @@ public final class HelicopterDriveStrategy implements DriveStrategy {
         if (!this.isHelicopter(this.controller)) {
             return false;
         }
-        boolean combat = this.validCombatTarget() != null
-                || VehicleAiMemory.getDriveRequest(this.mob).targetEntity().filter(Entity::isAlive).isPresent();
+        boolean combat = VehicleAiTuning.vehicleDriveTarget(
+                this.mob, VehicleAiMemory.getDriveRequest(this.mob)) != null;
         boolean navigation = VehicleAiMemory.getNavigationDriveRequest(this.mob).intent() == DriveIntent.MOVE_TO;
         return this.mode == DriveVehicleGoal.Mode.NAVIGATION
                 ? !combat && navigation
@@ -267,10 +272,7 @@ public final class HelicopterDriveStrategy implements DriveStrategy {
         if (this.mode == DriveVehicleGoal.Mode.NAVIGATION) {
             return null;
         }
-        if (request.targetEntity().isPresent() && request.targetEntity().get().isAlive()) {
-            return request.targetEntity().get();
-        }
-        return this.validCombatTarget();
+        return VehicleAiTuning.vehicleDriveTarget(this.mob, request);
     }
 
     private Vec3 targetPointForPlan(Entity target, boolean preferStableFire) {
@@ -374,69 +376,82 @@ public final class HelicopterDriveStrategy implements DriveStrategy {
             return HelicopterFlightPlanner.visibilityRecoveryPlan(aircraftState, targetCenter, desiredY, recoveryWaypoint);
         }
 
-        HelicopterFlightPlanner.Plan combatPlan = pressure == null ? this.visibleCombatPlan(
-                aircraftState, target, targetCenter, desiredY, hoverHeight, combatDistance,
-                preferStableFire, fixedWeaponAimed, fixedWeaponAttackActive, fixedWeaponAttackRecovering,
-                environment) : null;
-        boolean idleCombat = combatPlan != null && !fixedWeaponAttackActive
-                && (combatPlan.phase() == HelicopterFlightPlanner.Phase.COMBAT_HOVER
-                || combatPlan.phase() == HelicopterFlightPlanner.Phase.FIRE_HOLD);
+        CombatAction combatAction = this.combatAction(aircraftState, target, targetCenter, combatDistance,
+                preferStableFire, fixedWeaponAimed, fixedWeaponAttackActive, fixedWeaponAttackRecovering);
+        double distance = horizontalDistance(aircraftState.position(), targetCenter);
+        boolean idleCombat = !fixedWeaponAttackActive
+                && (combatAction == CombatAction.FIRE_HOLD
+                || combatAction == CombatAction.POSITION
+                && distance >= combatDistance - HelicopterFlightPlanner.INNER_COMBAT_TOLERANCE
+                && distance <= combatDistance + HelicopterFlightPlanner.OUTER_COMBAT_TOLERANCE
+                && !this.flightPlanner.retreatInProgress());
         HelicopterFlightPlanner.Plan evasive = this.flightPlanner.evasionPlan(
                 this.controller, aircraftState, pressure != null ? pressure : idleCombat ? airFirePressure : null,
                 incoming, target, targetCenter, desiredY,
                 combatDistance, VehicleAiTuning.followRange(this.mob), environment);
         if (evasive != null) return evasive;
-        return combatPlan != null ? combatPlan : this.visibleCombatPlan(
+        return this.visibleCombatPlan(
                 aircraftState, target, targetCenter, desiredY, hoverHeight, combatDistance,
-                preferStableFire, fixedWeaponAimed, fixedWeaponAttackActive, fixedWeaponAttackRecovering,
-                environment);
+                combatAction, environment);
     }
 
-    private HelicopterFlightPlanner.Plan visibleCombatPlan(
+    private CombatAction combatAction(
             HelicopterFlightPlanner.AircraftState aircraftState, Entity target, Vec3 targetCenter,
-            double desiredY, double hoverHeight, double combatDistance, boolean preferStableFire,
-            boolean fixedWeaponAimed, boolean fixedWeaponAttackActive, boolean fixedWeaponAttackRecovering,
-            HelicopterEnvironment environment) {
-        int targetId = target.getId();
+            double combatDistance, boolean preferStableFire, boolean fixedWeaponAimed,
+            boolean fixedWeaponAttackActive, boolean fixedWeaponAttackRecovering) {
         Entity targetVehicle = target.getRootVehicle();
         if (horizontalDistance(aircraftState.position(), targetVehicle.position())
                 > combatDistance + HelicopterFlightPlanner.OUTER_COMBAT_TOLERANCE
                 && !targetVehicle.onGround() && VehicleControllers.create(targetVehicle)
                 .map(VehicleController::supportsFlightControl).orElse(false)) {
-            return this.combatPositionPlan(
-                    aircraftState, targetId, targetCenter, desiredY, hoverHeight, combatDistance, environment);
+            return CombatAction.POSITION;
         }
-
-        if (fixedWeaponAttackActive) {
-            return HelicopterFlightPlanner.attackRunPlan(targetCenter, desiredY);
+        if (fixedWeaponAttackActive) return CombatAction.ATTACK_RUN;
+        if (preferStableFire && !fixedWeaponAttackRecovering) {
+            if (fixedWeaponAimed) return CombatAction.FIRE_HOLD;
+            if (HelicopterFlightPlanner.fixedWeaponAttackYawAligned(aircraftState, targetCenter)) {
+                return CombatAction.ATTACK_RUN;
+            }
         }
+        return CombatAction.POSITION;
+    }
 
-        if (preferStableFire) {
-            if (fixedWeaponAttackRecovering) {
-                return this.combatPositionPlan(
-                        aircraftState, targetId, targetCenter, desiredY, hoverHeight, combatDistance, environment);
-            }
-            if (fixedWeaponAimed) {
-                return HelicopterFlightPlanner.fireHoldPlan(aircraftState, targetCenter, desiredY);
-            }
-            if (!HelicopterFlightPlanner.fixedWeaponAttackYawAligned(aircraftState, targetCenter)) {
-                return this.combatPositionPlan(
-                        aircraftState, targetId, targetCenter, desiredY, hoverHeight, combatDistance, environment);
-            }
-            return HelicopterFlightPlanner.attackRunPlan(targetCenter, desiredY);
-        }
-
-        return this.combatPositionPlan(
-                aircraftState, targetId, targetCenter, desiredY, hoverHeight, combatDistance, environment);
+    private HelicopterFlightPlanner.Plan visibleCombatPlan(
+            HelicopterFlightPlanner.AircraftState aircraftState, Entity target, Vec3 targetCenter,
+            double desiredY, double hoverHeight, double combatDistance, CombatAction action,
+            HelicopterEnvironment environment) {
+        return switch (action) {
+            case FIRE_HOLD -> HelicopterFlightPlanner.fireHoldPlan(aircraftState, targetCenter, desiredY);
+            case ATTACK_RUN -> HelicopterFlightPlanner.attackRunPlan(targetCenter, desiredY);
+            case POSITION -> this.combatPositionPlan(
+                    aircraftState, target.getId(), targetCenter, desiredY, hoverHeight, combatDistance, environment);
+        };
     }
 
     private HelicopterFlightPlanner.Plan combatPositionPlan(
             HelicopterFlightPlanner.AircraftState state, int targetId, Vec3 targetCenter,
             double desiredY, double hoverHeight, double combatDistance,
             HelicopterEnvironment environment) {
-        return this.flightPlanner.combatPositionPlan(
+        double distance = horizontalDistance(state.position(), targetCenter);
+        boolean retreating = distance < combatDistance - HelicopterFlightPlanner.INNER_COMBAT_TOLERANCE;
+        boolean closing = distance > combatDistance + HelicopterFlightPlanner.OUTER_COMBAT_TOLERANCE;
+        HelicopterFlightPlanner.Plan positioning = standardCombatPositionPlan(
+                state, targetCenter, desiredY, combatDistance, distance);
+        if (!retreating && !this.flightPlanner.retreatInProgress()) return positioning;
+        return this.flightPlanner.resolveRetreat(
                 this.controller, targetId, state, targetCenter, desiredY, hoverHeight,
-                combatDistance, VehicleAiTuning.followRange(this.mob), environment);
+                combatDistance, VehicleAiTuning.followRange(this.mob), positioning, retreating, closing, environment);
+    }
+
+    static HelicopterFlightPlanner.Plan standardCombatPositionPlan(
+            HelicopterFlightPlanner.AircraftState state, Vec3 targetCenter,
+            double desiredY, double combatDistance, double distance) {
+        if (distance < combatDistance - HelicopterFlightPlanner.INNER_COMBAT_TOLERANCE
+                || distance > combatDistance + HelicopterFlightPlanner.OUTER_COMBAT_TOLERANCE) {
+            return HelicopterFlightPlanner.combatDistancePlan(state, targetCenter, desiredY, combatDistance);
+        }
+        return new HelicopterFlightPlanner.Plan(new Vec3(state.position().x, desiredY, state.position().z),
+                targetCenter, 0.0D, true, true, HelicopterFlightPlanner.Phase.COMBAT_HOVER);
     }
 
     private void updateFixedAttackState(Entity target, HelicopterFlightPlanner.AircraftState state,
@@ -526,25 +541,44 @@ public final class HelicopterDriveStrategy implements DriveStrategy {
                 && controller.supportsFlightControl();
     }
 
+    private void updateRaidNavigation() {
+        if (this.mode != DriveVehicleGoal.Mode.NAVIGATION || !this.isHelicopter(this.controller)
+                || !(this.mob instanceof Raider raider)) {
+            return;
+        }
+        DriveRequest current = VehicleAiMemory.getNavigationDriveRequest(this.mob);
+        boolean ownsRequest = this.raidNavigation != null && current == this.raidNavigation;
+        if (!raider.hasActiveRaid() || raider.getCurrentRaid().isOver()
+                || VehicleAiTuning.isValidCombatTarget(this.mob, this.mob.getTarget())) {
+            if (ownsRequest) VehicleAiMemory.clearNavigationDriveRequest(this.mob);
+            this.raidNavigation = null;
+            return;
+        }
+        if (current.intent() != DriveIntent.NONE && !ownsRequest) {
+            this.raidNavigation = null;
+            return;
+        }
+        // Vanilla raid waypoints require nearby walkable ground, unavailable to an airborne driver.
+        Vec3 destination = Vec3.atBottomCenterOf(raider.getCurrentRaid().getCenter());
+        if (ownsRequest && current.targetPosition().filter(destination::equals).isPresent()) return;
+        this.raidNavigation = DriveRequest.moveTo(destination);
+        VehicleAiMemory.setNavigationDriveRequest(this.mob, this.raidNavigation);
+    }
+
     private DriveRequest currentDriveRequest() {
         if (this.mode == DriveVehicleGoal.Mode.NAVIGATION) {
             return VehicleAiMemory.getNavigationDriveRequest(this.mob);
         }
         DriveRequest request = VehicleAiMemory.getDriveRequest(this.mob);
-        if (request.intent() != DriveIntent.NONE) {
+        Entity target = VehicleAiTuning.vehicleDriveTarget(this.mob, request);
+        if (target != null && request.targetEntity().filter(target::equals).isPresent()) {
             return request;
         }
-        LivingEntity target = this.validCombatTarget();
         if (target != null) {
             return DriveRequest.chase(target, VehicleAiTuning.chaseDistance(this.mob));
         }
         VehicleAiLogger.debugEvery(this.mob, 40, "Drive has no target and no memory request");
         return DriveRequest.NONE;
-    }
-
-    private LivingEntity validCombatTarget() {
-        LivingEntity target = this.mob.getTarget();
-        return VehicleAiTuning.isValidVehicleDriveTarget(this.mob, target) ? target : null;
     }
 
     private static Vec3 targetCenter(Entity target) {
@@ -556,5 +590,11 @@ public final class HelicopterDriveStrategy implements DriveStrategy {
         double dx = first.x - second.x;
         double dz = first.z - second.z;
         return Math.sqrt(dx * dx + dz * dz);
+    }
+
+    private enum CombatAction {
+        POSITION,
+        FIRE_HOLD,
+        ATTACK_RUN
     }
 }

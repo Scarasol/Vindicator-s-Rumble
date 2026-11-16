@@ -10,125 +10,92 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class GroundDriveStrategyTest {
+class GroundDriveControlTest {
     private static final double STOP_DISTANCE = 21.0D;
     private static final double START_DISTANCE = 42.0D;
     private static final VehicleDimensions DIMENSIONS = new VehicleDimensions(3.0D, 2.0D, 5.0D);
 
     @Test
-    void rammingOverridesWeaponDriveMemoryWhenTargetIsValid() {
-        assertEquals(
-                DriveIntent.RAM_TARGET,
-                GroundDriveStrategy.combatDriveIntent(DriveIntent.CHASE_TARGET, true, true));
+    void ramWindupStartsOnlyWhenCloseAndTargetNotInFrontArc() {
+        assertTrue(GroundDriveControl.shouldStartRamWindup(25.0D, 80.0D));
+        assertFalse(GroundDriveControl.shouldStartRamWindup(49.0D, 80.0D));
+        assertFalse(GroundDriveControl.shouldStartRamWindup(25.0D, 10.0D));
+        assertTrue(GroundDriveControl.shouldStartRamWindup(25.0D, 20.0D));
     }
 
     @Test
-    void supportFireMemoryOverridesRammingWhenTargetIsValid() {
-        assertEquals(
-                DriveIntent.SUPPORT_FIRE,
-                GroundDriveStrategy.combatDriveIntent(DriveIntent.SUPPORT_FIRE, true, true));
-    }
-
-    @Test
-    void weaponDriveMemoryRemainsWhenRammingIsUnavailable() {
-        assertEquals(
-                DriveIntent.CHASE_TARGET,
-                GroundDriveStrategy.combatDriveIntent(DriveIntent.CHASE_TARGET, true, false));
-    }
-
-    @Test
-    void supportFireMemoryRemainsWhenRammingIsUnavailable() {
-        assertEquals(
-                DriveIntent.SUPPORT_FIRE,
-                GroundDriveStrategy.combatDriveIntent(DriveIntent.SUPPORT_FIRE, true, false));
-    }
-
-    @Test
-    void supportFireMemoryIsIgnoredWithoutValidTarget() {
-        assertEquals(
-                DriveIntent.NONE,
-                GroundDriveStrategy.combatDriveIntent(DriveIntent.SUPPORT_FIRE, false, false));
-    }
-
-    @Test
-    void validTargetFallsBackToChaseWithoutMemoryOrRamming() {
-        assertEquals(
-                DriveIntent.CHASE_TARGET,
-                GroundDriveStrategy.combatDriveIntent(DriveIntent.NONE, true, false));
-    }
-
-    @Test
-    void noTargetAndNoMemoryStaysIdle() {
-        assertEquals(
-                DriveIntent.NONE,
-                GroundDriveStrategy.combatDriveIntent(DriveIntent.NONE, false, false));
+    void ramWindupContinuesUntilReleaseDistanceOrTargetFrontArc() {
+        assertTrue(GroundDriveControl.shouldContinueRamWindup(81.0D, 80.0D));
+        assertFalse(GroundDriveControl.shouldContinueRamWindup(144.0D, 80.0D));
+        assertFalse(GroundDriveControl.shouldContinueRamWindup(81.0D, 10.0D));
+        assertTrue(GroundDriveControl.shouldContinueRamWindup(81.0D, 20.0D));
     }
 
     @Test
     void replanCacheKeepsReadyPathWhileIntervalIsActive() {
-        GroundDriveStrategy.PathPlanKey previous = key(DriveIntent.CHASE_TARGET, 7, new Vec3(0.0D, 64.0D, 0.0D), 0);
-        GroundDriveStrategy.PathPlanKey next = key(DriveIntent.CHASE_TARGET, 7, new Vec3(20.0D, 64.0D, 0.0D), 0);
+        GroundDriveControl.PathPlanKey previous = key(DriveIntent.CHASE_TARGET, 7, new Vec3(0.0D, 64.0D, 0.0D), 0);
+        GroundDriveControl.PathPlanKey next = key(DriveIntent.CHASE_TARGET, 7, new Vec3(20.0D, 64.0D, 0.0D), 0);
 
-        assertFalse(GroundDriveStrategy.shouldReplanPath(previous, next, 10, true));
+        assertFalse(GroundDriveControl.shouldReplanPath(previous, next, 10, true));
     }
 
     @Test
     void replanCacheReusesReadyPathAfterIntervalWhenTargetBarelyMoved() {
-        GroundDriveStrategy.PathPlanKey previous = key(DriveIntent.CHASE_TARGET, 7, new Vec3(0.0D, 64.0D, 0.0D), 0);
-        GroundDriveStrategy.PathPlanKey next = key(DriveIntent.CHASE_TARGET, 7, new Vec3(3.0D, 64.0D, 0.0D), 0);
+        GroundDriveControl.PathPlanKey previous = key(DriveIntent.CHASE_TARGET, 7, new Vec3(0.0D, 64.0D, 0.0D), 0);
+        GroundDriveControl.PathPlanKey next = key(DriveIntent.CHASE_TARGET, 7, new Vec3(3.0D, 64.0D, 0.0D), 0);
 
-        assertFalse(GroundDriveStrategy.shouldReplanPath(previous, next, 0, true));
+        assertFalse(GroundDriveControl.shouldReplanPath(previous, next, 0, true));
     }
 
     @Test
     void replanCacheRefreshesReadyPathAfterIntervalWhenTargetMovedEnough() {
-        GroundDriveStrategy.PathPlanKey previous = key(DriveIntent.CHASE_TARGET, 7, new Vec3(0.0D, 64.0D, 0.0D), 0);
-        GroundDriveStrategy.PathPlanKey next = key(DriveIntent.CHASE_TARGET, 7, new Vec3(4.0D, 64.0D, 0.0D), 0);
+        GroundDriveControl.PathPlanKey previous = key(DriveIntent.CHASE_TARGET, 7, new Vec3(0.0D, 64.0D, 0.0D), 0);
+        GroundDriveControl.PathPlanKey next = key(DriveIntent.CHASE_TARGET, 7, new Vec3(4.0D, 64.0D, 0.0D), 0);
 
-        assertTrue(GroundDriveStrategy.shouldReplanPath(previous, next, 0, true));
+        assertTrue(GroundDriveControl.shouldReplanPath(previous, next, 0, true));
     }
 
     @Test
     void replanCacheRefreshesImmediatelyWhenIntentChanges() {
-        GroundDriveStrategy.PathPlanKey previous = key(DriveIntent.CHASE_TARGET, 7, new Vec3(0.0D, 64.0D, 0.0D), 0);
-        GroundDriveStrategy.PathPlanKey next = key(DriveIntent.SUPPORT_FIRE, 7, new Vec3(0.0D, 64.0D, 0.0D), 0);
+        GroundDriveControl.PathPlanKey previous = key(DriveIntent.CHASE_TARGET, 7, new Vec3(0.0D, 64.0D, 0.0D), 0);
+        GroundDriveControl.PathPlanKey next = key(DriveIntent.SUPPORT_FIRE, 7, new Vec3(0.0D, 64.0D, 0.0D), 0);
 
-        assertTrue(GroundDriveStrategy.shouldReplanPath(previous, next, 10, true));
+        assertTrue(GroundDriveControl.shouldReplanPath(previous, next, 10, true));
     }
 
     @Test
     void replanCacheRefreshesImmediatelyWhenCapturedPathChanges() {
-        GroundDriveStrategy.PathPlanKey previous = key(DriveIntent.MOVE_TO, -1, new Vec3(20.0D, 64.0D, 20.0D), 11);
-        GroundDriveStrategy.PathPlanKey next = key(DriveIntent.MOVE_TO, -1, new Vec3(20.0D, 64.0D, 20.0D), 12);
+        GroundDriveControl.PathPlanKey previous = key(DriveIntent.MOVE_TO, -1, new Vec3(20.0D, 64.0D, 20.0D), 11);
+        GroundDriveControl.PathPlanKey next = key(DriveIntent.MOVE_TO, -1, new Vec3(20.0D, 64.0D, 20.0D), 12);
 
-        assertTrue(GroundDriveStrategy.shouldReplanPath(previous, next, 10, true));
+        assertTrue(GroundDriveControl.shouldReplanPath(previous, next, 10, true));
     }
 
     @Test
     void replanCachePlansWhenNoReadyPathExists() {
-        GroundDriveStrategy.PathPlanKey previous = key(DriveIntent.CHASE_TARGET, 7, new Vec3(0.0D, 64.0D, 0.0D), 0);
-        GroundDriveStrategy.PathPlanKey next = key(DriveIntent.CHASE_TARGET, 7, new Vec3(0.0D, 64.0D, 0.0D), 0);
+        GroundDriveControl.PathPlanKey previous = key(DriveIntent.CHASE_TARGET, 7, new Vec3(0.0D, 64.0D, 0.0D), 0);
+        GroundDriveControl.PathPlanKey next = key(DriveIntent.CHASE_TARGET, 7, new Vec3(0.0D, 64.0D, 0.0D), 0);
 
-        assertTrue(GroundDriveStrategy.shouldReplanPath(previous, next, 10, false));
+        assertTrue(GroundDriveControl.shouldReplanPath(previous, next, 10, false));
     }
 
     @Test
     void collisionBoxRoundoffDoesNotInvalidateTheRoute() {
-        var previous = new GroundDriveStrategy.PathPlanKey(DriveIntent.MOVE_TO, -1, BlockPos.ZERO,
+        var previous = new GroundDriveControl.PathPlanKey(DriveIntent.MOVE_TO, -1, BlockPos.ZERO,
                 Vec3.ZERO, new VehicleDimensions(4.319649677552661D, 2.2602501314165693D, 7.2270238233546D), 0);
-        var next = new GroundDriveStrategy.PathPlanKey(DriveIntent.MOVE_TO, -1, BlockPos.ZERO,
+        var next = new GroundDriveControl.PathPlanKey(DriveIntent.MOVE_TO, -1, BlockPos.ZERO,
                 Vec3.ZERO, new VehicleDimensions(4.31964967741942D, 2.26025003930085D, 7.227025280344662D), 0);
 
-        assertFalse(GroundDriveStrategy.shouldReplanPath(previous, next, 19, true));
+        assertFalse(GroundDriveControl.shouldReplanPath(previous, next, 19, true));
     }
 
     @Test
     void widerBodyWithTheSameDiagonalReplansForRoadClearance() {
         var previous = key(DriveIntent.MOVE_TO, -1, Vec3.ZERO, 0);
-        var next = new GroundDriveStrategy.PathPlanKey(DriveIntent.MOVE_TO, -1, BlockPos.ZERO,
+        var next = new GroundDriveControl.PathPlanKey(DriveIntent.MOVE_TO, -1, BlockPos.ZERO,
                 Vec3.ZERO, new VehicleDimensions(4.0D, 2.0D, 4.0D), 0);
 
-        assertTrue(GroundDriveStrategy.shouldReplanPath(previous, next, 19, true));
+        assertTrue(GroundDriveControl.shouldReplanPath(previous, next, 19, true));
     }
 
     @Test
@@ -137,9 +104,9 @@ class GroundDriveStrategyTest {
         for (VehicleDimensions dimensions : new VehicleDimensions[]{
                 new VehicleDimensions(4.0D, 2.0D, 5.0D),
                 new VehicleDimensions(3.0D, 2.1D, 5.0D)}) {
-            var next = new GroundDriveStrategy.PathPlanKey(DriveIntent.MOVE_TO, -1, BlockPos.ZERO,
+            var next = new GroundDriveControl.PathPlanKey(DriveIntent.MOVE_TO, -1, BlockPos.ZERO,
                     Vec3.ZERO, dimensions, 0);
-            assertTrue(GroundDriveStrategy.shouldReplanPath(previous, next, 19, true));
+            assertTrue(GroundDriveControl.shouldReplanPath(previous, next, 19, true));
         }
     }
 
@@ -202,15 +169,15 @@ class GroundDriveStrategyTest {
         GroundClearance backBlocked = new GroundClearance(8.0D, 1.0D, 8.0D, 8.0D);
         GroundClearance frontBlocked = new GroundClearance(1.0D, 8.0D, 8.0D, 8.0D);
 
-        assertTrue(GroundDriveStrategy.isRetreatInputBlocked(
+        assertTrue(GroundDriveControl.isRetreatInputBlocked(
                 new com.scarasol.vindicatorsrumble.api.vehicle.VehicleInput(false, true, false, false, false, false, false, false, false, false),
                 backBlocked,
                 2.25D));
-        assertFalse(GroundDriveStrategy.isRetreatInputBlocked(
+        assertFalse(GroundDriveControl.isRetreatInputBlocked(
                 new com.scarasol.vindicatorsrumble.api.vehicle.VehicleInput(true, false, false, false, false, false, false, false, false, false),
                 backBlocked,
                 2.25D));
-        assertTrue(GroundDriveStrategy.isRetreatInputBlocked(
+        assertTrue(GroundDriveControl.isRetreatInputBlocked(
                 new com.scarasol.vindicatorsrumble.api.vehicle.VehicleInput(true, false, false, false, false, false, false, false, false, false),
                 frontBlocked,
                 2.25D));
@@ -221,20 +188,12 @@ class GroundDriveStrategyTest {
         GroundClearance blockedBack = new GroundClearance(8.0D, 1.0D, 8.0D, 8.0D);
         GroundClearance openBack = new GroundClearance(8.0D, 8.0D, 8.0D, 8.0D);
 
-        assertFalse(GroundDriveStrategy.canExitManeuverWithInput(
+        assertFalse(GroundDriveControl.canExitManeuverWithInput(
                 new com.scarasol.vindicatorsrumble.api.vehicle.VehicleInput(false, true, false, false, false, false, false, false, false, false),
                 blockedBack));
-        assertTrue(GroundDriveStrategy.canExitManeuverWithInput(
+        assertTrue(GroundDriveControl.canExitManeuverWithInput(
                 new com.scarasol.vindicatorsrumble.api.vehicle.VehicleInput(false, true, false, false, false, false, false, false, false, false),
                 openBack));
-    }
-
-    @Test
-    void fireWindowHoldSuppressesNoMovementManeuverOnlyWhileActive() {
-        assertTrue(GroundDriveStrategy.suppressStuckForFireWindowHold(1));
-        assertTrue(GroundDriveStrategy.suppressStuckForFireWindowHold(20));
-        assertFalse(GroundDriveStrategy.suppressStuckForFireWindowHold(0));
-        assertFalse(GroundDriveStrategy.suppressStuckForFireWindowHold(-1));
     }
 
     @Test
@@ -275,7 +234,7 @@ class GroundDriveStrategyTest {
 
     private static boolean shouldBrake(double distance, boolean closing, boolean retreating,
                                        boolean alreadyBraking, boolean moving, double speed) {
-        return GroundDriveStrategy.shouldBrakeChaseBand(
+        return GroundDriveControl.shouldBrakeChaseBand(
                 distance * distance,
                 STOP_DISTANCE,
                 START_DISTANCE,
@@ -286,8 +245,8 @@ class GroundDriveStrategyTest {
                 speed);
     }
 
-    private static GroundDriveStrategy.PathPlanKey key(DriveIntent intent, int targetEntityId, Vec3 position, int pathIdentity) {
-        return new GroundDriveStrategy.PathPlanKey(
+    private static GroundDriveControl.PathPlanKey key(DriveIntent intent, int targetEntityId, Vec3 position, int pathIdentity) {
+        return new GroundDriveControl.PathPlanKey(
                 intent,
                 targetEntityId,
                 BlockPos.containing(position),

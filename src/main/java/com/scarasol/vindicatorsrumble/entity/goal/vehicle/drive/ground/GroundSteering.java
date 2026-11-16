@@ -66,7 +66,8 @@ final class GroundSteering {
         boolean forward = !reverse && !brake && (absDiff < forwardAngle || horizontalSpeedSqr < TURN_BRAKE_SPEED_SQR);
         boolean sprint = !preferStableFire && forward && !left && !right && absDiff < 18.0F && remainingDistanceSqr > 256.0D;
 
-        return new SteeringResult(new VehicleInput(forward, reverse, left, right, brake, sprint, false, false, false, false), turnDirection);
+        return new SteeringResult(new VehicleInput(forward, reverse, left, right, brake, sprint, false, false, false, false),
+                turnDirection, tightTurn || targetBehind);
     }
 
     static SteeringResult steerRamToward(VehicleController controller, Vec3 waypoint, int previousTurnDirection) {
@@ -96,7 +97,8 @@ final class GroundSteering {
         float absDiff = Math.abs(diff);
         double horizontalSpeedSqr = horizontalSpeedSqr(controller);
         boolean close = distanceSqr < 36.0D;
-        boolean forward = !close || absDiff < 18.0F;
+        boolean forward = (!close || absDiff < 18.0F)
+                && (type != VehicleMovementType.TRACK || absDiff < 75.0F);
         boolean brake = !forward && horizontalSpeedSqr > TURN_BRAKE_SPEED_SQR;
         boolean sprint = forward && absDiff < 18.0F && distanceSqr > 4.0D;
 
@@ -215,6 +217,9 @@ final class GroundSteering {
         return 0;
     }
 
-    record SteeringResult(VehicleInput input, int turnDirection) {
+    record SteeringResult(VehicleInput input, int turnDirection, boolean requiresReverse) {
+        SteeringResult(VehicleInput input, int turnDirection) {
+            this(input, turnDirection, input.back());
+        }
     }
 }

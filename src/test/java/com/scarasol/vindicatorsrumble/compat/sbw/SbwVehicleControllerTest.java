@@ -107,6 +107,36 @@ class SbwVehicleControllerTest {
     }
 
     @Test
+    void crushFriendlyFilterWrapsOnlyAndAllNativeCrushDamageCalls() throws IOException {
+        ClassNode motion = readClass("com/atsuishio/superbwarfare/entity/vehicle/utils/VehicleMotionUtils");
+        MethodNode crush = motion.methods.stream()
+                .filter(method -> method.name.equals("crushEntities")).findFirst().orElseThrow();
+        Set<String> damageCalls = new HashSet<>();
+        for (var instruction : crush.instructions) {
+            if (instruction instanceof MethodInsnNode call
+                    && (call.name.equals("hurt") || call.name.equals("forceHurt"))) {
+                damageCalls.add("L" + call.owner + ";" + call.name + call.desc);
+            }
+        }
+        assertEquals(3, damageCalls.size(), "Review every native crush-damage entry point");
+        Set<String> wrappedCalls = new HashSet<>();
+        ClassNode mixin = readClass("com/scarasol/vindicatorsrumble/mixin/sbw/VehicleCrushFriendlyFireMixin");
+        for (MethodNode handler : mixin.methods) {
+            if (handler.visibleAnnotations == null) continue;
+            for (AnnotationNode injection : handler.visibleAnnotations) {
+                if (!injection.desc.equals("Lcom/llamalad7/mixinextras/injector/wrapoperation/WrapOperation;")) continue;
+                assertEquals(List.of(crush.name + crush.desc), annotationValue(injection, "method", List.of()));
+                Object at = annotationValue(injection, "at", List.of());
+                List<?> points = at instanceof AnnotationNode ? List.of(at) : (List<?>) at;
+                for (Object point : points) {
+                    wrappedCalls.add((String) annotationValue((AnnotationNode) point, "target", ""));
+                }
+            }
+        }
+        assertEquals(damageCalls, wrappedCalls);
+    }
+
+    @Test
     void releaseMixinSelectorsResolveAgainstPublishedSbw() throws IOException {
         try (JarFile release = new JarFile(System.getProperty("vindicatorsRumble.releaseJar"));
              JarFile sbw = new JarFile(System.getProperty("vindicatorsRumble.sbwReleaseJar"));

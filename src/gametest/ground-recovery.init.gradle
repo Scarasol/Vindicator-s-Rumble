@@ -9,7 +9,18 @@ gradle.beforeProject { project ->
     project.afterEvaluate {
         project.sourceSets.gameTest.java {
             setSrcDirs(['src/gametest/java'])
-            if (project.hasProperty('groundCommands')) {
+            if (project.hasProperty('groundSpawn')) {
+                include 'com/scarasol/vindicatorsrumble/gametest/VehicleSpawnGameTests.java'
+                include 'com/scarasol/vindicatorsrumble/gametest/vehicle/VehicleGroundSpawnGameTests.java'
+                include 'com/scarasol/vindicatorsrumble/compat/sbw/SbwGameTestVehicle.java'
+            } else if (project.hasProperty('groundAll')) {
+                include 'com/scarasol/vindicatorsrumble/gametest/vehicle/Ground*GameTests.java'
+                include 'com/scarasol/vindicatorsrumble/gametest/fixture/VehicleTrackingFixture.java'
+                include 'com/scarasol/vindicatorsrumble/compat/sbw/SbwGameTestVehicle.java'
+            } else if (project.hasProperty('groundReverse')) {
+                include 'com/scarasol/vindicatorsrumble/gametest/vehicle/GroundReverseRecoveryGameTests.java'
+                include 'com/scarasol/vindicatorsrumble/compat/sbw/SbwGameTestVehicle.java'
+            } else if (project.hasProperty('groundCommands')) {
                 include 'com/scarasol/vindicatorsrumble/gametest/vehicle/RecruitsMovementGameTests.java'
                 include 'com/scarasol/vindicatorsrumble/compat/sbw/SbwGameTestVehicle.java'
             } else if (project.hasProperty('groundConvergence')) {
@@ -34,6 +45,7 @@ gradle.beforeProject { project ->
                 include 'com/scarasol/vindicatorsrumble/gametest/profile/mixin/GroundRadarTimingMixin.java'
                 include 'com/scarasol/vindicatorsrumble/gametest/profile/mixin/GroundPathTimingMixin.java'
                 include 'com/scarasol/vindicatorsrumble/gametest/profile/mixin/GroundDriveTimingMixin.java'
+                include 'com/scarasol/vindicatorsrumble/gametest/profile/mixin/GroundControlTimingMixin.java'
                 include 'com/scarasol/vindicatorsrumble/gametest/profile/mixin/GroundNavigationTimingMixin.java'
             }
         }

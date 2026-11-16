@@ -1,22 +1,16 @@
 package com.scarasol.vindicatorsrumble.entity.goal.vehicle.drive;
 
 import com.scarasol.vindicatorsrumble.api.vehicle.VehicleController;
-import com.scarasol.vindicatorsrumble.api.vehicle.DriveIntent;
-import com.scarasol.vindicatorsrumble.api.vehicle.DriveRequest;
 import com.scarasol.vindicatorsrumble.api.vehicle.VehicleMovementType;
-import com.scarasol.vindicatorsrumble.api.vehicle.VehicleInput;
 import com.scarasol.vindicatorsrumble.compat.VehicleControllers;
 import com.scarasol.vindicatorsrumble.entity.goal.vehicle.common.VehicleAiGoal;
 import com.scarasol.vindicatorsrumble.entity.goal.vehicle.drive.ground.GroundDriveStrategy;
 import com.scarasol.vindicatorsrumble.entity.goal.vehicle.drive.helicopter.HelicopterDriveStrategy;
 import com.scarasol.vindicatorsrumble.util.VehicleAiLogger;
 import com.scarasol.vindicatorsrumble.util.VehicleAiMemory;
-import com.scarasol.vindicatorsrumble.util.VehicleAiTuning;
 import com.scarasol.vindicatorsrumble.util.VehicleSmokeDefense;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.ai.goal.Goal;
-import net.minecraft.world.entity.raid.Raider;
-import net.minecraft.world.phys.Vec3;
 
 import java.util.EnumSet;
 import java.util.Optional;
@@ -29,7 +23,6 @@ public class DriveVehicleGoal extends Goal implements VehicleAiGoal {
     private VehicleController controller;
     private DriveStrategy strategy;
     private boolean smokeOnly;
-    private DriveRequest raidNavigation;
 
     public DriveVehicleGoal(Mob mob) {
         this(mob, Mode.COMBAT);
@@ -73,7 +66,6 @@ public class DriveVehicleGoal extends Goal implements VehicleAiGoal {
         this.controller = current.get();
         this.strategy = this.strategyFor(this.controller);
         this.smokeOnly = false;
-        this.updateRaidFlightNavigation();
         if (this.strategy.canUse(this.controller, true)) {
             return true;
         }
@@ -91,7 +83,6 @@ public class DriveVehicleGoal extends Goal implements VehicleAiGoal {
             return false;
         }
         this.strategy = this.strategyFor(this.controller);
-        this.updateRaidFlightNavigation();
         if (this.smokeOnly) {
             return !this.otherDriverRunning() && VehicleSmokeDefense.shouldDeploy(this.mob, this.controller);
         }
@@ -103,15 +94,17 @@ public class DriveVehicleGoal extends Goal implements VehicleAiGoal {
         if (this.strategy == null && this.controller != null) {
             this.strategy = this.strategyFor(this.controller);
         }
-        if (!this.smokeOnly && this.strategy != null && this.controller != null) {
-            this.strategy.start(this.controller);
-            VehicleAiLogger.debug(this.mob, "{} drive goal started for vehicle {} type={} flight={} groundNav={} strategy={}",
+        if (this.strategy != null && this.controller != null) {
+            this.strategy.start(this.controller,
+                    this.smokeOnly ? DriveStrategy.Activation.DEFENSE_ONLY : DriveStrategy.Activation.DRIVE);
+            VehicleAiLogger.debug(this.mob, "{} drive goal started for vehicle {} type={} flight={} groundNav={} strategy={} smokeOnly={}",
                     this.mode,
                     this.controller.entity().getId(),
                     this.controller.movementType(),
                     this.controller.supportsFlightControl(),
                     this.controller.usesGroundNavigation(),
-                    this.strategy.name());
+                    this.strategy.name(),
+                    this.smokeOnly);
         }
     }
 
@@ -121,7 +114,6 @@ public class DriveVehicleGoal extends Goal implements VehicleAiGoal {
             this.strategy.stop(this.controller);
         }
         if (!this.smokeOnly && this.controller != null) {
-            this.controller.stopDriving(this.mob);
             VehicleAiLogger.debug(this.mob, "{} drive goal stopped for vehicle {}", this.mode, this.controller.entity().getId());
         }
         this.controller = null;
@@ -134,12 +126,7 @@ public class DriveVehicleGoal extends Goal implements VehicleAiGoal {
         if (this.controller == null || this.strategy == null) {
             return;
         }
-        if (this.smokeOnly) {
-            if (!this.otherDriverRunning()) {
-                this.controller.drive(this.mob, VehicleInput.NONE);
-            }
-            return;
-        }
+        if (this.smokeOnly && this.otherDriverRunning()) return;
         this.strategy.tick(this.controller);
     }
 
@@ -147,32 +134,6 @@ public class DriveVehicleGoal extends Goal implements VehicleAiGoal {
         return this.mob.goalSelector.getAvailableGoals().stream()
                 .anyMatch(goal -> goal.isRunning() && goal.getGoal() instanceof DriveVehicleGoal drive
                         && drive != this && !drive.smokeOnly);
-    }
-
-    private void updateRaidFlightNavigation() {
-        if (this.mode != Mode.NAVIGATION || !this.controller.supportsFlightControl()
-                || !(this.mob instanceof Raider raider)) {
-            return;
-        }
-        DriveRequest current = VehicleAiMemory.getNavigationDriveRequest(this.mob);
-        boolean ownsRequest = this.raidNavigation != null && current == this.raidNavigation;
-        if (!raider.hasActiveRaid() || raider.getCurrentRaid().isOver()
-                || VehicleAiTuning.isValidCombatTarget(this.mob, this.mob.getTarget())) {
-            if (ownsRequest) VehicleAiMemory.clearNavigationDriveRequest(this.mob);
-            this.raidNavigation = null;
-            return;
-        }
-        if (current.intent() != DriveIntent.NONE && !ownsRequest) {
-            this.raidNavigation = null;
-            return;
-        }
-        // Vanilla raid waypoints require nearby walkable ground, unavailable to an airborne driver.
-        Vec3 destination = Vec3.atBottomCenterOf(raider.getCurrentRaid().getCenter());
-        if (ownsRequest && current.targetPosition().filter(destination::equals).isPresent()) {
-            return;
-        }
-        this.raidNavigation = DriveRequest.moveTo(destination);
-        VehicleAiMemory.setNavigationDriveRequest(this.mob, this.raidNavigation);
     }
 
     private DriveStrategy strategyFor(VehicleController controller) {

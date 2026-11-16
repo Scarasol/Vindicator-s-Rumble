@@ -1,7 +1,6 @@
 package com.scarasol.vindicatorsrumble.util;
 
 import com.scarasol.vindicatorsrumble.api.vehicle.VehicleController;
-import com.scarasol.vindicatorsrumble.api.vehicle.VehicleInput;
 import com.scarasol.vindicatorsrumble.api.vehicle.VehicleThreats;
 import com.scarasol.vindicatorsrumble.compat.VehicleControllers;
 import com.scarasol.vindicatorsrumble.config.CommonConfig;
@@ -82,14 +81,6 @@ public final class VehicleSmokeDefense {
                 || defense.threatStage == VehicleThreats.Stage.LOCKED
                 || defense.acquiringSource != null
                 && now - defense.acquiringSince >= CommonConfig.SMOKE_ACQUIRING_TICKS.get());
-    }
-
-    public static VehicleInput applyInput(Mob mob, VehicleController controller, VehicleInput input) {
-        if (input.decoy() || !requestDeployment(mob, controller)) {
-            return input;
-        }
-        return new VehicleInput(input.forward(), input.back(), input.left(), input.right(), input.brake(),
-                input.sprint(), input.up(), input.down(), input.fire(), true);
     }
 
     public static boolean requestDeployment(Mob mob, VehicleController controller) {

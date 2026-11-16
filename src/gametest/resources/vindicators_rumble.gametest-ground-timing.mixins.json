@@ -10,6 +10,7 @@
     "GroundRadarTimingMixin",
     "GroundPathTimingMixin",
     "GroundDriveTimingMixin",
+    "GroundControlTimingMixin",
     "GroundNavigationTimingMixin"
   ]
 }

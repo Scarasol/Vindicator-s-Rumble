@@ -1,6 +1,7 @@
 package com.scarasol.vindicatorsrumble.util;
 
 import com.scarasol.vindicatorsrumble.api.vehicle.DriveIntent;
+import com.scarasol.vindicatorsrumble.api.vehicle.DriveRequest;
 import com.scarasol.vindicatorsrumble.api.vehicle.VehicleController;
 import com.scarasol.vindicatorsrumble.compat.VehicleControllers;
 import net.minecraft.util.Mth;
@@ -101,6 +102,19 @@ public class VehicleAiTuning {
 
     public static boolean isValidVehicleDriveTarget(Mob mob, LivingEntity target) {
         return isValidCombatTarget(mob, target);
+    }
+
+    public static Entity vehicleDriveTarget(Mob mob, DriveRequest request) {
+        Entity requested = request.targetEntity().orElse(null);
+        if (requested instanceof LivingEntity living) {
+            if (isValidVehicleDriveTarget(mob, living)) return living;
+        } else if (requested != null && requested.isAlive() && canAcquireTargets(mob)
+                && !AllegianceUtil.isSameSide(mob, requested)
+                && targetDistanceToSqr(mob, requested) <= followRange(mob) * followRange(mob)) {
+            return requested;
+        }
+        LivingEntity target = mob.getTarget();
+        return isValidVehicleDriveTarget(mob, target) ? target : null;
     }
 
     public static boolean isValidVehicleCombatTarget(Mob mob, LivingEntity target) {

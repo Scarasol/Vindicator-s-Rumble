@@ -6,7 +6,6 @@ import com.scarasol.vindicatorsrumble.entity.goal.vehicle.common.VehicleAiGoal;
 import com.scarasol.vindicatorsrumble.util.AllegianceUtil;
 import com.scarasol.vindicatorsrumble.util.VehicleAiLogger;
 import com.scarasol.vindicatorsrumble.util.VehicleAiMemory;
-import com.scarasol.vindicatorsrumble.util.VehicleClaimManager;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.ai.goal.Goal;
 
@@ -51,8 +50,6 @@ public class LeaveVehicleGoal extends Goal implements VehicleAiGoal {
 
     @Override
     public void stop() {
-        VehicleClaimManager.releaseAll(this.mob);
-        VehicleAiMemory.clear(this.mob);
         this.controller = null;
     }
 
@@ -66,8 +63,9 @@ public class LeaveVehicleGoal extends Goal implements VehicleAiGoal {
             this.stopTicks++;
             return;
         }
-        this.controller.dismount(this.mob);
-        VehicleAiLogger.debug(this.mob, "Dismounted vehicle {}", this.controller.entity().getId());
-        this.stopTicks = 20;
+        if (this.controller.dismount(this.mob)) {
+            VehicleAiLogger.debug(this.mob, "Dismounted vehicle {}", this.controller.entity().getId());
+            this.stopTicks = 20;
+        }
     }
 }

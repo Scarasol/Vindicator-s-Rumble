@@ -1,0 +1,6 @@
+Terrain-only regression fixture from the November 15, 2026 pickup navigation log.
+Source region: x=704..784, y=-64..-48, z=108..176.
+Stored block coordinates are relative to (736, -60, 142).
+Only block positions and block states are stored. No entities or block-entity data.
+The GameTest loads this snapshot in a separate structure-free flat test world.
+It never reads or writes a development save at runtime.

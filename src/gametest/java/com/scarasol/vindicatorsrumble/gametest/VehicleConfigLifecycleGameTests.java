@@ -4,6 +4,7 @@ import com.scarasol.vindicatorsrumble.compat.sbw.SbwGameTestVehicle;
 import com.scarasol.vindicatorsrumble.config.CommonConfig;
 import com.scarasol.vindicatorsrumble.entity.goal.vehicle.common.VehicleAiGoal;
 import com.scarasol.vindicatorsrumble.entity.goal.vehicle.weapon.VehicleWeaponGoal;
+import com.scarasol.vindicatorsrumble.gametest.fixture.VehicleTrackingFixture;
 import net.minecraft.core.BlockPos;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
@@ -24,7 +25,10 @@ import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.gametest.GameTestHolder;
 import net.minecraftforge.gametest.PrefixGameTestTemplate;
 import net.minecraftforge.common.MinecraftForge;
+import net.minecraftforge.event.entity.EntityJoinLevelEvent;
+import net.minecraftforge.event.entity.EntityLeaveLevelEvent;
 import net.minecraftforge.event.entity.EntityMountEvent;
+import net.minecraftforge.event.entity.living.LivingDeathEvent;
 import net.minecraftforge.eventbus.api.EventPriority;
 import net.minecraftforge.registries.ForgeRegistries;
 
@@ -143,25 +147,185 @@ public final class VehicleConfigLifecycleGameTests {
 
     @GameTest(batch = "config_lifecycle_cancelled_dismount", template = "empty", timeoutTicks = 40)
     public static void cancelledDismountPreservesTheMountedSnapshot(GameTestHelper helper) {
+        verifyCancelledDismount(helper, EventPriority.HIGHEST);
+    }
+
+    @GameTest(batch = "config_lifecycle_late_cancelled_dismount", template = "empty", timeoutTicks = 40)
+    public static void lateCancelledDismountPreservesRangeAndNavigation(GameTestHelper helper) {
+        verifyCancelledDismount(helper, EventPriority.LOWEST);
+    }
+
+    private static void verifyCancelledDismount(GameTestHelper helper, EventPriority priority) {
         for (boolean enabled : new boolean[]{true, false}) {
             try (Fixture fixture = new Fixture(helper, true)) {
                 CommonConfig.ENABLE_VEHICLE_AI.set(enabled);
+                helper.assertTrue(fixture.driver.getNavigation().moveTo(path(fixture.driver), 1.0D),
+                        "Could not establish navigation before canceled dismount");
                 Consumer<EntityMountEvent> cancel = event -> {
                     if (event.isDismounting() && event.getEntityMounting() == fixture.driver) event.setCanceled(true);
                 };
-                MinecraftForge.EVENT_BUS.addListener(EventPriority.HIGHEST, cancel);
+                MinecraftForge.EVENT_BUS.addListener(priority, cancel);
                 try {
                     fixture.driver.stopRiding();
                     helper.assertTrue(fixture.driver.getVehicle() == fixture.vehicle,
                             "Canceled dismount unexpectedly detached the passenger");
                     helper.assertTrue(Math.abs(fixture.driver.getAttributeValue(Attributes.FOLLOW_RANGE) - 80.0D) < 0.001D,
                             "Canceled dismount removed the active range snapshot");
+                    helper.assertTrue(fixture.driver.getNavigation().isInProgress(),
+                            "Canceled dismount discarded delegated navigation");
                 } finally {
                     MinecraftForge.EVENT_BUS.unregister(cancel);
                 }
             }
         }
         helper.succeed();
+    }
+
+    @GameTest(batch = "config_lifecycle_cancelled_death_navigation", template = "empty", timeoutTicks = 40)
+    public static void cancelledDeathPreservesMountedNavigation(GameTestHelper helper) {
+        try (Fixture fixture = new Fixture(helper, true)) {
+            helper.assertTrue(fixture.driver.getNavigation().moveTo(path(fixture.driver), 1.0D),
+                    "Could not establish navigation before canceled death");
+            int[] deaths = {0};
+            Consumer<LivingDeathEvent> cancel = event -> {
+                if (event.getEntity() != fixture.driver) return;
+                deaths[0]++;
+                event.setCanceled(true);
+                fixture.driver.setHealth(fixture.driver.getMaxHealth());
+            };
+            MinecraftForge.EVENT_BUS.addListener(EventPriority.LOWEST, cancel);
+            try {
+                // Enter vanilla death directly because enclosed seats reject damage before this event.
+                fixture.driver.setHealth(0.0F);
+                fixture.driver.die(fixture.level.damageSources().genericKill());
+                helper.assertTrue(deaths[0] == 1 && fixture.driver.isAlive() && !fixture.driver.isRemoved(),
+                        "Death fixture did not survive a canceled native death");
+                helper.assertTrue(fixture.driver.getVehicle() == fixture.vehicle,
+                        "Canceled death detached the driver");
+                helper.assertTrue(fixture.driver.getNavigation().isInProgress(),
+                        "Canceled death discarded delegated navigation");
+                helper.assertTrue(Math.abs(fixture.driver.getAttributeValue(Attributes.FOLLOW_RANGE) - 80.0D) < 0.001D,
+                        "Canceled death changed the mounted range snapshot");
+            } finally {
+                MinecraftForge.EVENT_BUS.unregister(cancel);
+            }
+            helper.succeed();
+        }
+    }
+
+    @GameTest(batch = "config_lifecycle_cancelled_mount", template = "empty", timeoutTicks = 40)
+    public static void lateCancelledMountDoesNotApplyRange(GameTestHelper helper) {
+        try (Fixture fixture = new Fixture(helper, true)) {
+            Mob passenger = fixture.mob(12.0D);
+            int[] mounts = {0};
+            Consumer<EntityMountEvent> cancel = event -> {
+                if (!event.isMounting() || event.getEntityMounting() != passenger) return;
+                mounts[0]++;
+                event.setCanceled(true);
+            };
+            MinecraftForge.EVENT_BUS.addListener(EventPriority.LOWEST, cancel);
+            try {
+                helper.assertTrue(!passenger.startRiding(fixture.vehicle, true) && !passenger.isPassenger()
+                                && mounts[0] == 1,
+                        "Mount fixture did not exercise a late cancellation");
+                helper.assertTrue(Math.abs(passenger.getAttributeValue(Attributes.FOLLOW_RANGE) - 32.0D) < 0.001D,
+                        "Canceled mount applied the vehicle range bonus");
+            } finally {
+                MinecraftForge.EVENT_BUS.unregister(cancel);
+            }
+            helper.succeed();
+        }
+    }
+
+    @GameTest(batch = "config_lifecycle_failed_mount", template = "empty", timeoutTicks = 40)
+    public static void rejectedMountDoesNotApplyRange(GameTestHelper helper) {
+        try (Fixture fixture = new Fixture(helper, true)) {
+            Mob passenger = fixture.mob(12.0D);
+            passenger.setShiftKeyDown(true);
+            int[] mounts = {0};
+            Consumer<EntityMountEvent> observe = event -> {
+                if (event.isMounting() && event.getEntityMounting() == passenger) mounts[0]++;
+            };
+            MinecraftForge.EVENT_BUS.addListener(EventPriority.LOWEST, observe);
+            try {
+                helper.assertTrue(!passenger.startRiding(fixture.vehicle) && !passenger.isPassenger()
+                                && mounts[0] == 1,
+                        "Mount fixture did not reach vanilla's post-event rejection");
+                helper.assertTrue(Math.abs(passenger.getAttributeValue(Attributes.FOLLOW_RANGE) - 32.0D) < 0.001D,
+                        "Rejected mount applied the vehicle range bonus");
+            } finally {
+                MinecraftForge.EVENT_BUS.unregister(observe);
+            }
+            helper.succeed();
+        }
+    }
+
+    @GameTest(batch = "config_lifecycle_failed_transfer", template = "empty", timeoutTicks = 40)
+    public static void rejectedTransferPreservesTheOriginalSnapshot(GameTestHelper helper) {
+        try (Fixture fixture = new Fixture(helper, true)) {
+            Entity other = fixture.vehicle(12.0D);
+            CommonConfig.VEHICLE_TARGET_RANGE.set(112.0D);
+            fixture.driver.setShiftKeyDown(true);
+            helper.assertTrue(!fixture.driver.startRiding(other) && fixture.driver.getVehicle() == fixture.vehicle,
+                    "Transfer fixture did not retain the original seat");
+            helper.assertTrue(Math.abs(fixture.driver.getAttributeValue(Attributes.FOLLOW_RANGE) - 80.0D) < 0.001D,
+                    "Rejected transfer refreshed the original range snapshot");
+            helper.succeed();
+        }
+    }
+
+    @GameTest(batch = "config_lifecycle_leave_cancel", template = "empty", timeoutTicks = 80)
+    public static void leaveGoalRetainsNavigationUntilDismountSucceeds(GameTestHelper helper) {
+        Fixture fixture = new Fixture(helper, true);
+        Mob hostile = EntityType.ZOMBIE.create(fixture.level);
+        hostile.setPos(fixture.vehicle.position());
+        hostile.setNoAi(true);
+        hostile.setInvulnerable(true);
+        fixture.entities.add(hostile);
+        helper.assertTrue(fixture.level.addFreshEntity(hostile)
+                        && hostile.startRiding(fixture.vehicle, true),
+                "Could not establish the hostile passenger that requires dismount");
+        helper.assertTrue(fixture.driver.getNavigation().moveTo(path(fixture.driver), 1.0D),
+                "Could not establish navigation before the leave Goal starts");
+        long[] firstAttempt = {-1};
+        boolean[] cancelDismount = {true};
+        Consumer<EntityMountEvent> cancel = event -> {
+            if (!event.isDismounting() || event.getEntityMounting() != fixture.driver) return;
+            if (firstAttempt[0] < 0) firstAttempt[0] = helper.getTick();
+            if (cancelDismount[0]) event.setCanceled(true);
+        };
+        MinecraftForge.EVENT_BUS.addListener(EventPriority.LOWEST, cancel);
+        fixture.driver.setNoAi(false);
+        helper.runAtTickTime(75, () -> {
+            MinecraftForge.EVENT_BUS.unregister(cancel);
+            fixture.close();
+        });
+        helper.startSequence().thenWaitUntil(() -> helper.assertTrue(
+                firstAttempt[0] >= 0 && helper.getTick() - firstAttempt[0] >= 3,
+                "Waiting for the native leave Goal's canceled dismount")).thenExecute(() -> {
+            try {
+                helper.assertTrue(fixture.driver.getVehicle() == fixture.vehicle,
+                        "Canceled leave Goal detached the driver");
+                helper.assertTrue(fixture.driver.getNavigation().isInProgress(),
+                        "Leave Goal discarded navigation after its dismount was canceled");
+                helper.assertTrue(Math.abs(fixture.driver.getAttributeValue(Attributes.FOLLOW_RANGE) - 80.0D) < 0.001D,
+                        "Canceled leave Goal changed the mounted range");
+                cancelDismount[0] = false;
+            } catch (RuntimeException | Error failure) {
+                MinecraftForge.EVENT_BUS.unregister(cancel);
+                fixture.close();
+                throw failure;
+            }
+        }).thenWaitUntil(() -> helper.assertTrue(!fixture.driver.isPassenger(),
+                "Leave Goal did not finish dismounting after cancellation ended")).thenExecute(() -> {
+            try {
+                helper.assertTrue(Math.abs(fixture.driver.getAttributeValue(Attributes.FOLLOW_RANGE) - 32.0D) < 0.001D,
+                        "Completed leave Goal retained the mounted range");
+            } finally {
+                MinecraftForge.EVENT_BUS.unregister(cancel);
+                fixture.close();
+            }
+        }).thenSucceed();
     }
 
     @GameTest(batch = "config_lifecycle_navigation", template = "empty", timeoutTicks = 40)
@@ -229,6 +393,78 @@ public final class VehicleConfigLifecycleGameTests {
             helper.assertTrue(vehicleGoals(passenger) > 0, "Restored passenger did not receive vehicle AI");
             helper.assertTrue(Math.abs(passenger.getAttributeValue(Attributes.FOLLOW_RANGE) - 112.0D) < 0.001D,
                     "Restored passenger retained or missed its range snapshot");
+            helper.succeed();
+        }
+    }
+
+    @GameTest(batch = "config_lifecycle_tracking_enabled", template = "empty", timeoutTicks = 40)
+    public static void trackingRoundTripPreservesHistoricalAiAndNavigation(GameTestHelper helper) {
+        try (Fixture fixture = new Fixture(helper, true)) {
+            Path supplied = path(fixture.driver);
+            helper.assertTrue(fixture.driver.getNavigation().moveTo(supplied, 1.0D),
+                    "Could not establish delegated navigation");
+            CommonConfig.ENABLE_VEHICLE_AI.set(false);
+            int[] leaves = {0};
+            int[] joins = {0};
+            Consumer<EntityLeaveLevelEvent> onLeave = event -> {
+                if (event.getEntity() == fixture.driver) leaves[0]++;
+            };
+            Consumer<EntityJoinLevelEvent> onJoin = event -> {
+                if (event.getEntity() == fixture.driver) joins[0]++;
+            };
+            MinecraftForge.EVENT_BUS.addListener(onLeave);
+            MinecraftForge.EVENT_BUS.addListener(onJoin);
+            try {
+                VehicleTrackingFixture.roundTrip(fixture.level, fixture.driver, () -> {
+                    helper.assertTrue(!fixture.driver.isRemoved(), "Tracking loss removed the fixture entity");
+                });
+                helper.assertTrue(leaves[0] == 1 && joins[0] == 0,
+                        "Fixture did not exercise a tracking-only leave without readmission");
+                helper.assertTrue(Math.abs(fixture.driver.getAttributeValue(Attributes.FOLLOW_RANGE) - 80.0D) < 0.001D,
+                        "Tracking loss removed the mounted range snapshot");
+                helper.assertTrue(fixture.driver.getNavigation().isInProgress(),
+                        "Tracking loss discarded active delegated navigation");
+                Path next = path(fixture.driver);
+                helper.assertTrue(fixture.driver.getNavigation().moveTo(next, 1.0D)
+                                && fixture.driver.getNavigation().getPath() != next,
+                        "Tracking recovery disabled historical vehicle AI after a hot switch");
+            } finally {
+                MinecraftForge.EVENT_BUS.unregister(onLeave);
+                MinecraftForge.EVENT_BUS.unregister(onJoin);
+            }
+            helper.succeed();
+        }
+    }
+
+    @GameTest(batch = "config_lifecycle_tracking_disabled", template = "empty", timeoutTicks = 40)
+    public static void trackingRoundTripDoesNotActivateHistoricalDisabledAi(GameTestHelper helper) {
+        try (Fixture fixture = new Fixture(helper, false)) {
+            CommonConfig.ENABLE_VEHICLE_AI.set(true);
+            VehicleTrackingFixture.roundTrip(fixture.level, fixture.driver, () -> {});
+            Path supplied = path(fixture.driver);
+            helper.assertTrue(fixture.driver.getNavigation().moveTo(supplied, 1.0D)
+                            && fixture.driver.getNavigation().getPath() == supplied,
+                    "Tracking recovery activated a historical disabled mob");
+            helper.assertTrue(vehicleGoals(fixture.driver) == 0
+                            && Math.abs(fixture.driver.getAttributeValue(Attributes.FOLLOW_RANGE) - 32.0D) < 0.001D,
+                    "Tracking recovery injected AI or changed the disabled mob's range");
+            helper.succeed();
+        }
+    }
+
+    @GameTest(batch = "config_lifecycle_hidden_removal", template = "empty", timeoutTicks = 40)
+    public static void actualRemovalWhileHiddenClearsOnlyExternalRuntimeState(GameTestHelper helper) {
+        try (Fixture fixture = new Fixture(helper, true)) {
+            helper.assertTrue(fixture.driver.getNavigation().moveTo(path(fixture.driver), 1.0D),
+                    "Could not establish delegated navigation before removal");
+            VehicleTrackingFixture.roundTrip(fixture.level, fixture.driver, () -> {
+                fixture.driver.remove(Entity.RemovalReason.UNLOADED_TO_CHUNK);
+                helper.assertTrue(fixture.driver.isRemoved(), "Native chunk-unload removal did not complete");
+                helper.assertTrue(Math.abs(fixture.driver.getAttributeValue(Attributes.FOLLOW_RANGE) - 80.0D) < 0.001D,
+                        "Removal unnecessarily rewrote the disposed Mob's own range attribute");
+                helper.assertTrue(fixture.driver.getNavigation().isDone(),
+                        "Actual hidden removal retained delegated navigation");
+            });
             helper.succeed();
         }
     }

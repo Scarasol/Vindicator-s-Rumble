@@ -2,7 +2,9 @@ package com.scarasol.vindicatorsrumble.entity.goal.vehicle.drive.helicopter;
 
 import com.scarasol.vindicatorsrumble.api.vehicle.VehicleFlightInput;
 import com.scarasol.vindicatorsrumble.api.vehicle.VehicleInput;
+import com.scarasol.vindicatorsrumble.api.vehicle.VehicleController;
 import net.minecraft.util.Mth;
+import net.minecraft.world.entity.Mob;
 import net.minecraft.world.phys.Vec3;
 
 final class HelicopterFlightControl {
@@ -58,6 +60,32 @@ final class HelicopterFlightControl {
         this.hoverToggleCooldown = 0;
         this.settlingAfterDive = false;
         this.banking = false;
+    }
+
+    void execute(Mob mob, VehicleController controller, HelicopterFlightPlanner.AircraftState state,
+                 HelicopterFlightPlanner.Plan plan, boolean decoy) {
+        VehicleFlightInput input = this.command(state, plan.flightRequest(), plan.environment(), decoy);
+        controller.controlFlight(mob, input);
+    }
+
+    void stop(Mob mob, VehicleController controller) {
+        this.reset();
+        controller.stopDriving(mob);
+    }
+
+    void idle(Mob mob, VehicleController controller, boolean decoy) {
+        this.reset();
+        if (decoy) {
+            controller.controlFlight(mob, new VehicleFlightInput(
+                    new VehicleInput(false, false, false, false, false, false, false, false, false, true),
+                    0.0D, 0.0D));
+        } else {
+            controller.stopDriving(mob);
+        }
+    }
+
+    void recover(Mob mob, VehicleController controller) {
+        controller.controlFlight(mob, neutralInput());
     }
 
     static VehicleFlightInput neutralInput() {

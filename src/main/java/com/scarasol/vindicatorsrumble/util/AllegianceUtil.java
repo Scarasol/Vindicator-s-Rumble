@@ -46,6 +46,9 @@ public class AllegianceUtil {
                 || second instanceof Raider && (first instanceof Raider || first instanceof Vex)) {
             return true;
         }
+        if (ModCompat.isGuardVillagersLoaded() && GuardVillagersCompat.isVillageAlly(first, second)) {
+            return true;
+        }
         return isConfiguredPlayerAlly(first, second);
     }
 
@@ -59,20 +62,28 @@ public class AllegianceUtil {
     }
 
     public static boolean shouldProjectileIgnoreTarget(Entity target, Entity shooter) {
-        if (target == null || !(shooter instanceof Mob shooterMob)
+        if (!(shooter instanceof Mob shooterMob)
                 || !shooterMob.getType().is(ModTags.EntityTypes.VEHICLE_AI_USERS)) {
             return false;
         }
-        if (target == shooter || target == shooter.getVehicle()
-                || target.getRootVehicle() == shooter.getRootVehicle()) {
+        return shouldIgnoreFriendlyDamage(target, shooter);
+    }
+
+    // Callers own applicability (projectile tags or admitted AI drivers).
+    public static boolean shouldIgnoreFriendlyDamage(Entity target, Entity attacker) {
+        if (target == null || attacker == null) {
+            return false;
+        }
+        if (target == attacker || target == attacker.getVehicle()
+                || target.getRootVehicle() == attacker.getRootVehicle()) {
             return true;
         }
-        if (isSameSide(shooter, target)) {
+        if (isSameSide(attacker, target)) {
             return true;
         }
         Entity rootVehicle = target.getRootVehicle();
-        return hasOnlyFriendlyLivingPassengers(shooter, target)
-                || rootVehicle != target && hasOnlyFriendlyLivingPassengers(shooter, rootVehicle);
+        return hasOnlyFriendlyLivingPassengers(attacker, target)
+                || rootVehicle != target && hasOnlyFriendlyLivingPassengers(attacker, rootVehicle);
     }
 
     private static boolean hasOnlyFriendlyLivingPassengers(Entity shooter, Entity vehicle) {

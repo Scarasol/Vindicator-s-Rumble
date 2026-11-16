@@ -2,7 +2,6 @@
   "replace": false,
   "values": [
     "minecraft:vindicator",
-    "minecraft:pillager",
     {
       "id": "recruits:recruit",
       "required": false

@@ -20,6 +20,10 @@ public class MixinPlugin implements IMixinConfigPlugin {
 
     @Override
     public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
+        if (mixinClassName.contains("sbw.pillagersgun.")) {
+            return getClass("com.atsuishio.superbwarfare.Mod")
+                    && getClass("com.scarasol.pillagers_gun.PillagersGunMod");
+        }
         if (mixinClassName.contains("recruits")) return getClass("com.talhanation.recruits.Main");
         if (mixinClassName.contains("guardvillagers")) return getClass("tallestegg.guardvillagers.GuardVillagers");
         if (mixinClassName.contains("tacz")) return getClass("com.tacz.guns.GunMod");
@@ -31,7 +35,7 @@ public class MixinPlugin implements IMixinConfigPlugin {
         try {
             Class.forName(className, false, this.getClass().getClassLoader());
             return true;
-        } catch (Exception ignored) {
+        } catch (Exception | LinkageError ignored) {
         }
         return false;
     }

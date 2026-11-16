@@ -9,6 +9,8 @@
   },
   "minVersion": "0.8",
   "mixins": [
+    "EntityRemovalMixin",
+    "EntityRidingMixin",
     "MobNavigationMixin",
     "NearestAttackableTargetGoalMixin",
     "PathNavigationMixin",
@@ -26,12 +28,16 @@
     "sbw.SeekingWeaponWarningMixin",
     "sbw.SbwInventoryToolMixin",
     "sbw.VehicleAutoFireMixin",
+    "sbw.VehicleCrushFriendlyFireMixin",
     "sbw.VehicleHurtTargetMixin",
+    "sbw.VehicleInaccuracyMixin",
     "sbw.VehicleSmokeMixin",
-    "sbw.VehiclePlayerFlightDebugMixin"
+    "sbw.VehiclePlayerFlightDebugMixin",
+    "sbw.pillagersgun.VehicleInaccuracyMixin"
   ],
   "client": [
     "recruits.ArmorStandRendererMixin",
+    "sbw.VehiclePassengerRendererMixin",
     "sbw.IllagerModelMixin",
     "sbw.IllagerItemInHandLayerMixin"
   ]

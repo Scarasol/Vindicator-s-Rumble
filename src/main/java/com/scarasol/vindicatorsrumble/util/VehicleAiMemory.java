@@ -190,7 +190,7 @@ public class VehicleAiMemory {
     }
 
     private static final class Memory {
-        // Admission is sampled on entity load, not cleared with tactical or mounted state.
+        // Admission lives with the Mob instance; weak keys release it without a lifecycle reset.
         final Set<Mob> vehicleAiUsers = Collections.newSetFromMap(new WeakHashMap<>());
         final Map<UUID, Timed<DriveRequest>> driveRequests = new HashMap<>();
         final Map<UUID, Timed<DriveRequest>> vehicleDriveRequests = new HashMap<>();

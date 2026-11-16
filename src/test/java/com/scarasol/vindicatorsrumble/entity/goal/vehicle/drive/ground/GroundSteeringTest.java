@@ -95,12 +95,14 @@ class GroundSteeringTest {
     void movingIntoUnreachableTurnBrakesBeforeReversing() {
         TestController controller = new TestController(Vec3.ZERO, 0.0F, new Vec3(0.0D, 0.0D, 0.8D),
                 VehicleMovementType.WHEEL, 10.0D);
-        VehicleInput input = GroundSteering.steerToward(controller, new Vec3(10.0D, 0.0D, 0.0D),
-                100.0D, false, 0).input();
+        GroundSteering.SteeringResult steering = GroundSteering.steerToward(controller,
+                new Vec3(10.0D, 0.0D, 0.0D), 100.0D, false, 0);
+        VehicleInput input = steering.input();
 
         assertTrue(input.brake());
         assertFalse(input.forward());
         assertFalse(input.back());
+        assertTrue(steering.requiresReverse());
     }
 
     @Test
@@ -276,6 +278,20 @@ class GroundSteeringTest {
         assertTrue(input.forward());
         assertTrue(input.left());
         assertFalse(input.brake());
+    }
+
+    @Test
+    void trackedRamPivotsRatherThanAcceleratingThroughALargeTurn() {
+        for (double speed : new double[]{0.0D, 0.3D}) {
+            TestController controller = new TestController(Vec3.ZERO, 0.0F,
+                    new Vec3(0.0D, 0.0D, speed), VehicleMovementType.TRACK);
+            VehicleInput input = GroundSteering.steerRamToward(controller, new Vec3(10.0D, 0.0D, 0.0D), 0).input();
+
+            assertFalse(input.forward());
+            assertFalse(input.back());
+            assertTrue(input.left());
+            assertEquals(speed > 0.0D, input.brake());
+        }
     }
 
     @Test

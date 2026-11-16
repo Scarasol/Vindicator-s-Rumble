@@ -36,7 +36,6 @@ import com.scarasol.vindicatorsrumble.api.vehicle.WeaponPayloadType;
 import com.scarasol.vindicatorsrumble.api.vehicle.WeaponStatus;
 import com.scarasol.vindicatorsrumble.config.CommonConfig;
 import com.scarasol.vindicatorsrumble.util.VehicleAiLogger;
-import com.scarasol.vindicatorsrumble.util.VehicleSmokeDefense;
 import com.scarasol.vindicatorsrumble.util.AllegianceUtil;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
@@ -342,7 +341,6 @@ public class SbwVehicleController implements VehicleController {
         if (!CommonConfig.VEHICLE_AI_NEEDS_FUEL.get()) {
             this.refillVehicleEnergy();
         }
-        input = VehicleSmokeDefense.applyInput(mob, this, input);
         short keys = this.toSbwGroundKeys(input);
         this.vehicle.processInput(keys);
         if (VehicleAiLogger.shouldLog(mob, 40)) {
@@ -367,9 +365,6 @@ public class SbwVehicleController implements VehicleController {
         }
         this.vehicle.mouseInput(input.mouseX(), input.mouseY());
         short keys = this.toSbwFlightKeys(input);
-        if (VehicleSmokeDefense.requestDeployment(mob, this)) {
-            keys |= 0b001000000;
-        }
         this.vehicle.processInput(keys);
         if (VehicleAiLogger.shouldLog(mob, 40)) {
             VehicleAiLogger.debugEvery(mob, 40,
@@ -493,7 +488,7 @@ public class SbwVehicleController implements VehicleController {
             if (this.supportsFlightControl()) {
                 this.vehicle.mouseInput(0.0D, 0.0D);
             }
-            this.vehicle.processInput(toSbwKeys(VehicleSmokeDefense.applyInput(mob, this, VehicleInput.NONE)));
+            this.vehicle.processInput(toSbwKeys(VehicleInput.NONE));
             VehicleAiLogger.debugEvery(mob, 20, "SBW stopDriving vehicle={} seat={}", this.vehicle.getId(), this.vehicle.getSeatIndex(mob));
         }
     }

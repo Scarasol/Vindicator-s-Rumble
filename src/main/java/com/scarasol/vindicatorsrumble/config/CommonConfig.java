@@ -13,6 +13,7 @@ public class CommonConfig {
     public static final ForgeConfigSpec.ConfigValue<Boolean> ENABLE_VEHICLE_AI;
     public static final ForgeConfigSpec.ConfigValue<Boolean> VEHICLE_AI_NEEDS_FUEL;
     public static final ForgeConfigSpec.ConfigValue<Boolean> VEHICLE_AI_NEEDS_AMMO;
+    public static final ForgeConfigSpec.DoubleValue VEHICLE_WEAPON_INACCURACY_MULTIPLIER;
     public static final ForgeConfigSpec.ConfigValue<Boolean> STRICT_PLAYER_ALLIANCE;
     public static final ForgeConfigSpec.ConfigValue<List<? extends String>> FRIENDLY_TAG;
     public static final ForgeConfigSpec.DoubleValue VEHICLE_TARGET_RANGE;
@@ -42,6 +43,12 @@ public class CommonConfig {
                 .define("Vehicle AI Needs Fuel", false);
         VEHICLE_AI_NEEDS_AMMO = BUILDER.comment("Whether vehicle AI must consume or provide ammo when firing vehicle weapons.")
                 .define("Vehicle AI Needs Ammo", false);
+        VEHICLE_WEAPON_INACCURACY_MULTIPLIER = BUILDER.comment("""
+                Multiplies each weapon's native spread for vehicle AI shots. 1 preserves native spread; 0 removes random spread.
+                Values below 1 are more accurate; values above 1 are less accurate. This is not a hit probability and does not affect players or handheld guns.
+                When Pillager's Gun is installed, its dynamic inaccuracy event is applied after this multiplier.
+                """)
+                .defineInRange("Vehicle Weapon Inaccuracy Multiplier", 1.3D, 0.0D, 100.0D);
         STRICT_PLAYER_ALLIANCE = BUILDER.comment("Whether Guard Villagers and Recruits must be owned, allied, or friendly by reputation to share vehicles with players. Disable for lenient neutral-friendly behavior.")
                 .define("Strict Player Alliance", true);
         FRIENDLY_TAG = BUILDER.comment("Entity type tag IDs whose members are treated as allies for vehicle ownership and firing checks.")
@@ -62,14 +69,14 @@ public class CommonConfig {
                 .defineInRange("Smoke Heavy Hit Ratio", 0.15D, 0.01D, 1.0D);
         SMOKE_LOW_HEALTH_RATIO = BUILDER.comment("Maximum remaining vehicle health fraction for smoke on a new enemy hit. Low health alone does not trigger smoke.")
                 .defineInRange("Smoke Low Health Ratio", 0.40D, 0.0D, 1.0D);
-        VINDICATOR_RAID_VEHICLE_CHANCE = BUILDER.comment("Chance for a Vindicator spawned by a high-level raid to spawn a nearby vehicle.")
+        VINDICATOR_RAID_VEHICLE_CHANCE = BUILDER.comment("Chance for a raid member in vindicators_rumble:vehicle_ai_users to spawn a nearby vehicle.")
                 .defineInRange("Vindicator Raid Vehicle Chance", 0.05D, 0.0D, 1.0D);
-        VINDICATOR_RAID_MIN_BAD_OMEN_LEVEL = BUILDER.comment("Minimum raid Bad Omen level required before raid Vindicators can spawn vehicles.")
+        VINDICATOR_RAID_MIN_BAD_OMEN_LEVEL = BUILDER.comment("Minimum raid Bad Omen level required before tagged raid members can spawn vehicles.")
                 .defineInRange("Vindicator Raid Minimum Bad Omen Level", 4, 0, 5);
-        VINDICATOR_RAID_MIN_WAVE = BUILDER.comment("First raid wave whose Vindicators may spawn vehicles. Waves start at 1; Bad Omen and vehicle chance requirements still apply.")
+        VINDICATOR_RAID_MIN_WAVE = BUILDER.comment("First raid wave whose tagged members may spawn vehicles. Waves start at 1; Bad Omen and vehicle chance requirements still apply.")
                 .defineInRange("Vindicator Raid Minimum Wave", 2, 1, Integer.MAX_VALUE);
         VINDICATOR_RAID_VEHICLE_TYPES = BUILDER.comment("""
-                Vehicle entity type IDs and their weights for eligible raid Vindicators, patrol members, and ordinary spawns of vehicle_ai_users.
+                Vehicle entity type IDs and their weights for eligible tagged raid members, patrol members, and ordinary spawns of vehicle_ai_users.
                 Format: "superbwarfare:sodayo_pick_up_hmg, 5" means this vehicle has a spawn weight of 5.
                 """).defineList("Vindicator Raid Vehicle Types", List.of(
                         "superbwarfare:sodayo_pick_up_hmg, 9",
@@ -84,7 +91,10 @@ public class CommonConfig {
                         "superbwarfare:sodayo_pick_up_hmg, 9",
                         "superbwarfare:sodayo_pick_up_tow, 1"
                 ), CommonConfig::isWeightedResourceLocation);
-        PATROL_VEHICLE_CHANCE = BUILDER.comment("Chance per newly spawned illager patrol member to generate a vehicle. Uses Vindicator Raid Vehicle Types; raid members are excluded.")
+        PATROL_VEHICLE_CHANCE = BUILDER.comment("""
+                Chance per newly spawned illager patrol member to generate a vehicle. Uses Vindicator Raid Vehicle Types; raid members are excluded.
+                Patrol pillagers outside vehicle_ai_users are replaced with tagged Vindicators only when a vehicle is generated.
+                """)
                 .defineInRange("Patrol Vehicle Chance", 0.02D, 0.0D, 1.0D);
         NATURAL_VEHICLE_CHANCE = BUILDER.comment("""
                 Chance per newly generated mob in vindicators_rumble:vehicle_ai_users to generate a nearby vehicle.

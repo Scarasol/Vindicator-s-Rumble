@@ -314,7 +314,7 @@ class HelicopterFlightControlCharacterizationTest {
                 new Vec3(10.0D, 28.0D, 0.0D), Vec3.ZERO,
                 90.0F, 0.0F, 0.0F, true, true, 0.04F, 22.0D);
         HelicopterFlightPlanner.Plan continuation =
-                HelicopterFlightPlanner.retreatContinuationPlan(firstState, targetCenter, 28.0D, 42.0D);
+                HelicopterDriveStrategy.standardCombatPositionPlan(firstState, targetCenter, 28.0D, 42.0D, 10.0D);
 
         assertEquals(new Vec3(42.0D, 28.0D, 0.0D), continuation.desiredPosition());
         assertEquals(targetCenter, continuation.aimPoint());
@@ -326,17 +326,17 @@ class HelicopterFlightControlCharacterizationTest {
         assertEquals(0.0D, reverse.mouseX(), EPSILON);
         assertTrue(reverse.mouseY() < 0.0D);
 
-        HelicopterFlightPlanner.Plan rotated = HelicopterFlightPlanner.retreatContinuationPlan(
+        HelicopterFlightPlanner.Plan rotated = HelicopterDriveStrategy.standardCombatPositionPlan(
                 state(new Vec3(0.0D, 28.0D, 10.0D), Vec3.ZERO,
                         180.0F, 0.0F, 0.0F, true, true, 0.04F, 22.0D),
-                targetCenter, 28.0D, 42.0D);
+                targetCenter, 28.0D, 42.0D, 10.0D);
         assertEquals(new Vec3(0.0D, 28.0D, 42.0D), rotated.desiredPosition());
         assertEquals(targetCenter, rotated.aimPoint());
 
-        HelicopterFlightPlanner.Plan inBand = HelicopterFlightPlanner.retreatContinuationPlan(
+        HelicopterFlightPlanner.Plan inBand = HelicopterDriveStrategy.standardCombatPositionPlan(
                 state(new Vec3(35.0D, 28.0D, 0.0D), Vec3.ZERO,
                         90.0F, 0.0F, 0.0F, true, true, 0.04F, 22.0D),
-                targetCenter, 28.0D, 42.0D);
+                targetCenter, 28.0D, 42.0D, 35.0D);
         assertEquals(HelicopterFlightPlanner.Phase.COMBAT_HOVER, inBand.phase());
         assertEquals(new Vec3(35.0D, 28.0D, 0.0D), inBand.desiredPosition());
         assertEquals(targetCenter, inBand.aimPoint());

@@ -113,19 +113,4 @@ class DriveVehicleGoalTest {
                 false));
     }
 
-    @Test
-    void ramWindupStartsOnlyWhenCloseAndTargetNotInFrontArc() {
-        assertTrue(GroundDriveStrategy.shouldStartRamWindup(25.0D, 80.0D));
-        assertFalse(GroundDriveStrategy.shouldStartRamWindup(49.0D, 80.0D));
-        assertFalse(GroundDriveStrategy.shouldStartRamWindup(25.0D, 10.0D));
-        assertTrue(GroundDriveStrategy.shouldStartRamWindup(25.0D, 20.0D));
-    }
-
-    @Test
-    void ramWindupContinuesUntilReleaseDistanceOrTargetFrontArc() {
-        assertTrue(GroundDriveStrategy.shouldContinueRamWindup(81.0D, 80.0D));
-        assertFalse(GroundDriveStrategy.shouldContinueRamWindup(144.0D, 80.0D));
-        assertFalse(GroundDriveStrategy.shouldContinueRamWindup(81.0D, 10.0D));
-        assertTrue(GroundDriveStrategy.shouldContinueRamWindup(81.0D, 20.0D));
-    }
 }

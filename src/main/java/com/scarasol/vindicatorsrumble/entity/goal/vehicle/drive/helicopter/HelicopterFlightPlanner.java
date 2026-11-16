@@ -359,12 +359,16 @@ public final class HelicopterFlightPlanner {
                 false, true, Phase.APPROACH);
     }
 
-    Plan combatPositionPlan(VehicleController controller, int targetId, AircraftState state,
-                            Vec3 targetCenter, double desiredY, double hoverHeight,
-                            double combatDistance, double followRange,
-                            HelicopterEnvironment environment) {
+    boolean retreatInProgress() {
+        return this.retreatDirection != null;
+    }
+
+    Plan resolveRetreat(VehicleController controller, int targetId, AircraftState state,
+                        Vec3 targetCenter, double desiredY, double hoverHeight,
+                        double combatDistance, double followRange, Plan positioning,
+                        boolean retreating, boolean closing, HelicopterEnvironment environment) {
         if (environment == HelicopterEnvironment.NONE) {
-            return standardCombatPositionPlan(state, targetCenter, desiredY, combatDistance);
+            return positioning;
         }
 
         long gameTime = controller.level().getGameTime();
@@ -377,11 +381,10 @@ public final class HelicopterFlightPlanner {
         this.lastCombatPlanTick = gameTime;
 
         if (this.visibilityRecovery.recovering()) {
-            return standardCombatPositionPlan(state, targetCenter, desiredY, combatDistance);
+            return positioning;
         }
 
         double horizontalDistance = horizontalDistance(state.position(), targetCenter);
-        boolean retreating = horizontalDistance < combatDistance - INNER_COMBAT_TOLERANCE;
         double exitDistance = Math.min(combatDistance, Math.max(0.0D, followRange - DIVE_PASS_RANGE_MARGIN));
 
         if (this.retreatDirection != null) {
@@ -390,7 +393,7 @@ public final class HelicopterFlightPlanner {
                 this.retreatPullingOut = true;
                 this.retreatContinuesAfterPullOut = true;
             }
-            if (!this.retreatCrossedTarget && horizontalDistance > combatDistance + OUTER_COMBAT_TOLERANCE) {
+            if (!this.retreatCrossedTarget && closing) {
                 this.clearRetreatRoute();
             } else {
                 double horizontalSpeed = Math.hypot(state.velocity().x, state.velocity().z);
@@ -403,14 +406,14 @@ public final class HelicopterFlightPlanner {
                     this.retreatPullingOut = false;
                     if (!this.retreatContinuesAfterPullOut) {
                         this.clearRetreatRoute();
-                        return standardCombatPositionPlan(state, targetCenter, desiredY, combatDistance);
+                        return positioning;
                     }
                 }
 
                 if (this.retreatContinuesAfterPullOut) {
                     if (!retreating) {
                         this.clearRetreatRoute();
-                        return standardCombatPositionPlan(state, targetCenter, desiredY, combatDistance);
+                        return positioning;
                     }
                     return this.safeRetreatPlan(controller, state, targetCenter, desiredY, combatDistance);
                 }
@@ -455,7 +458,7 @@ public final class HelicopterFlightPlanner {
             return this.safeRetreatPlan(controller, state, targetCenter, desiredY, combatDistance);
         }
 
-        return standardCombatPositionPlan(state, targetCenter, desiredY, combatDistance);
+        return positioning;
     }
 
     private static Plan divePassAlignmentPlan(AircraftState state, Vec3 facingPoint, double desiredY) {
@@ -470,11 +473,6 @@ public final class HelicopterFlightPlanner {
 
     static Plan divePassPlan(Vec3 exitPoint, Vec3 aimPoint) {
         return plan(exitPoint, aimPoint, 1.0D, false, true, Phase.DIVE_PASS);
-    }
-
-    static Plan retreatContinuationPlan(AircraftState state, Vec3 targetCenter,
-                                        double desiredY, double combatDistance) {
-        return standardCombatPositionPlan(state, targetCenter, desiredY, combatDistance);
     }
 
     static Plan attackRunPlan(Vec3 targetCenter, double desiredY) {
@@ -522,7 +520,7 @@ public final class HelicopterFlightPlanner {
             if (this.visibilityRecovery.directDestinationClear(
                     controller, targetCenter, state.position(), destination)) {
                 return angle == 0.0D
-                        ? retreatContinuationPlan(state, targetCenter, desiredY, combatDistance)
+                        ? combatDistancePlan(state, targetCenter, desiredY, combatDistance)
                         : plan(destination, targetCenter, APPROACH_CRUISE_SPEED, true,
                         true, Phase.APPROACH);
             }
@@ -582,22 +580,15 @@ public final class HelicopterFlightPlanner {
                 <= DIVE_PASS_START_STOPPING_DISTANCE;
     }
 
-    private static Plan standardCombatPositionPlan(AircraftState state, Vec3 targetCenter,
-                                                   double desiredY, double combatDistance) {
-        double horizontalDistance = horizontalDistance(state.position(), targetCenter);
-        boolean outsideCombatBand = horizontalDistance < combatDistance - INNER_COMBAT_TOLERANCE
-                || horizontalDistance > combatDistance + OUTER_COMBAT_TOLERANCE;
-        if (outsideCombatBand) {
-            Vec3 away = horizontalUnit(state.position().subtract(targetCenter), state);
-            Vec3 desiredPosition = new Vec3(
-                    targetCenter.x + away.x * combatDistance,
-                    desiredY,
-                    targetCenter.z + away.z * combatDistance);
-            return plan(desiredPosition, targetCenter, APPROACH_CRUISE_SPEED, true,
-                    true, Phase.APPROACH);
-        }
-        Vec3 desiredPosition = new Vec3(state.position().x, desiredY, state.position().z);
-        return plan(desiredPosition, targetCenter, 0.0D, true, true, Phase.COMBAT_HOVER);
+    static Plan combatDistancePlan(AircraftState state, Vec3 targetCenter,
+                                   double desiredY, double combatDistance) {
+        Vec3 away = horizontalUnit(state.position().subtract(targetCenter), state);
+        Vec3 desiredPosition = new Vec3(
+                targetCenter.x + away.x * combatDistance,
+                desiredY,
+                targetCenter.z + away.z * combatDistance);
+        return plan(desiredPosition, targetCenter, APPROACH_CRUISE_SPEED, true,
+                true, Phase.APPROACH);
     }
 
     private static double divePassPullOutTargetAltitude(double hoverHeight) {

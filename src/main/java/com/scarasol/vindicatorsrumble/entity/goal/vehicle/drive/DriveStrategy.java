@@ -7,11 +7,16 @@ public interface DriveStrategy {
 
     boolean canContinueToUse(VehicleController controller);
 
-    void start(VehicleController controller);
+    void start(VehicleController controller, Activation activation);
 
     void stop(VehicleController controller);
 
     void tick(VehicleController controller);
 
     String name();
+
+    enum Activation {
+        DRIVE,
+        DEFENSE_ONLY
+    }
 }

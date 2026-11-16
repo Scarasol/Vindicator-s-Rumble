@@ -54,9 +54,9 @@ class GroundDriveMetricsTest {
             double front = randomRange(random, 0.2D, 2.0D);
             double back = front + randomRange(random, 0.05D, 4.5D);
             GroundClearance clearance = new GroundClearance(front, back, randomRange(random, 0.4D, 7.0D), randomRange(random, 0.4D, 7.0D));
-            GroundManeuverStep initial = GroundDriveStrategy.selectInitialManeuverStep(clearance, false);
-            GroundManeuverStep preferredStraight = GroundDriveStrategy.preferredMovementStep(clearance, false);
-            GroundManeuverStep preferredTurn = GroundDriveStrategy.preferredMovementStep(clearance, true);
+            GroundManeuverStep initial = GroundDriveControl.selectInitialManeuverStep(clearance, false);
+            GroundManeuverStep preferredStraight = GroundDriveControl.preferredMovementStep(clearance, false);
+            GroundManeuverStep preferredTurn = GroundDriveControl.preferredMovementStep(clearance, true);
             if (initial == GroundManeuverStep.BACK_STRAIGHT
                     && preferredStraight == GroundManeuverStep.BACK_STRAIGHT
                     && preferredTurn == GroundManeuverStep.BACK_TURN) {
@@ -70,7 +70,7 @@ class GroundDriveMetricsTest {
             double front = randomRange(random, 3.0D, 7.0D);
             GroundClearance clearance = new GroundClearance(front, front + randomRange(random, 0.05D, 1.0D),
                     randomRange(random, 0.4D, 7.0D), randomRange(random, 0.4D, 7.0D));
-            GroundManeuverStep initial = GroundDriveStrategy.selectInitialManeuverStep(clearance, false);
+            GroundManeuverStep initial = GroundDriveControl.selectInitialManeuverStep(clearance, false);
             if (initial == GroundManeuverStep.SWING_FORWARD) {
                 clearFront++;
             } else {
@@ -82,9 +82,9 @@ class GroundDriveMetricsTest {
             double back = randomRange(random, 0.2D, 5.4D);
             double front = back + randomRange(random, 0.05D, 4.5D);
             GroundClearance clearance = new GroundClearance(front, back, randomRange(random, 0.4D, 7.0D), randomRange(random, 0.4D, 7.0D));
-            GroundManeuverStep initial = GroundDriveStrategy.selectInitialManeuverStep(clearance, false);
-            GroundManeuverStep preferredStraight = GroundDriveStrategy.preferredMovementStep(clearance, false);
-            GroundManeuverStep preferredTurn = GroundDriveStrategy.preferredMovementStep(clearance, true);
+            GroundManeuverStep initial = GroundDriveControl.selectInitialManeuverStep(clearance, false);
+            GroundManeuverStep preferredStraight = GroundDriveControl.preferredMovementStep(clearance, false);
+            GroundManeuverStep preferredTurn = GroundDriveControl.preferredMovementStep(clearance, true);
             if (initial == GroundManeuverStep.SWING_FORWARD
                     && preferredStraight == GroundManeuverStep.SWING_FORWARD
                     && preferredTurn == GroundManeuverStep.SWING_FORWARD) {
@@ -96,7 +96,7 @@ class GroundDriveMetricsTest {
 
         for (int i = 0; i < MANEUVER_CASES; i++) {
             GroundClearance clearance = randomClearance(random);
-            GroundManeuverStep initial = GroundDriveStrategy.selectInitialManeuverStep(clearance, true);
+            GroundManeuverStep initial = GroundDriveControl.selectInitialManeuverStep(clearance, true);
             if (initial == GroundManeuverStep.BRAKE) {
                 braking++;
             } else {
@@ -108,7 +108,7 @@ class GroundDriveMetricsTest {
             double front = randomRange(random, 0.2D, 4.0D);
             GroundClearance clearance = new GroundClearance(front, front + randomRange(random, 0.1D, 5.0D), randomRange(random, 0.6D, 7.0D), randomRange(random, 0.6D, 7.0D));
             int ticks = random.nextInt(10);
-            GroundManeuverStep next = GroundDriveStrategy.nextBackStraightStep(clearance, ticks, 0);
+            GroundManeuverStep next = GroundDriveControl.nextBackStraightStep(clearance, ticks, 0);
             if (next == GroundManeuverStep.BACK_STRAIGHT) {
                 backStraightTransitions++;
             } else {
@@ -121,7 +121,7 @@ class GroundDriveMetricsTest {
             GroundClearance clearance = new GroundClearance(front, front + randomRange(random, 0.1D, 5.0D), randomRange(random, 0.6D, 7.0D), randomRange(random, 0.6D, 7.0D));
             int ticks = randomRangeInt(random, 10, 30);
             int noProgressTicks = random.nextBoolean() ? 0 : 5;
-            GroundManeuverStep next = GroundDriveStrategy.nextBackStraightStep(clearance, ticks, noProgressTicks);
+            GroundManeuverStep next = GroundDriveControl.nextBackStraightStep(clearance, ticks, noProgressTicks);
             if (next == GroundManeuverStep.BACK_TURN) {
                 backTurnTransitions++;
             } else {
@@ -153,7 +153,7 @@ class GroundDriveMetricsTest {
 
         for (int i = 0; i < TURN_CASES; i++) {
             GroundClearance clearance = new GroundClearance(randomRange(random, 0.4D, 5.0D), randomRange(random, 0.4D, 5.0D), randomRange(random, 3.0D, 8.0D), randomRange(random, 0.4D, 1.2D));
-            int direction = GroundDriveStrategy.selectManeuverTurnDirection(clearance, randomRange(random, -90.0D, 90.0D), 0);
+            int direction = GroundDriveControl.selectManeuverTurnDirection(clearance, randomRange(random, -90.0D, 90.0D), 0);
             if (direction == -1) {
                 leftOpen++;
             } else {
@@ -163,7 +163,7 @@ class GroundDriveMetricsTest {
 
         for (int i = 0; i < TURN_CASES; i++) {
             GroundClearance clearance = new GroundClearance(randomRange(random, 0.4D, 5.0D), randomRange(random, 0.4D, 5.0D), randomRange(random, 0.4D, 1.2D), randomRange(random, 3.0D, 8.0D));
-            int direction = GroundDriveStrategy.selectManeuverTurnDirection(clearance, randomRange(random, -90.0D, 90.0D), 0);
+            int direction = GroundDriveControl.selectManeuverTurnDirection(clearance, randomRange(random, -90.0D, 90.0D), 0);
             if (direction == 1) {
                 rightOpen++;
             } else {
@@ -173,7 +173,7 @@ class GroundDriveMetricsTest {
 
         for (int i = 0; i < TURN_CASES; i++) {
             GroundClearance clearance = new GroundClearance(randomRange(random, 0.4D, 5.0D), randomRange(random, 0.4D, 5.0D), randomRange(random, 0.1D, 1.0D), randomRange(random, 2.0D, 8.0D));
-            int direction = GroundDriveStrategy.selectManeuverTurnDirection(clearance, randomRange(random, -90.0D, 90.0D), -1);
+            int direction = GroundDriveControl.selectManeuverTurnDirection(clearance, randomRange(random, -90.0D, 90.0D), -1);
             if (direction == 1) {
                 leftSqueezed++;
             } else {
@@ -183,7 +183,7 @@ class GroundDriveMetricsTest {
 
         for (int i = 0; i < TURN_CASES; i++) {
             GroundClearance clearance = new GroundClearance(randomRange(random, 0.4D, 5.0D), randomRange(random, 0.4D, 5.0D), randomRange(random, 2.0D, 8.0D), randomRange(random, 0.1D, 1.0D));
-            int direction = GroundDriveStrategy.selectManeuverTurnDirection(clearance, randomRange(random, -90.0D, 90.0D), 1);
+            int direction = GroundDriveControl.selectManeuverTurnDirection(clearance, randomRange(random, -90.0D, 90.0D), 1);
             if (direction == -1) {
                 rightSqueezed++;
             } else {
@@ -241,7 +241,7 @@ class GroundDriveMetricsTest {
         for (int i = 0; i < RAM_CASES; i++) {
             double distanceSqr = randomRange(random, 0.25D, 35.8D);
             double yawDiff = randomSign(random) * randomRange(random, 12.25D, 178.0D);
-            if (GroundDriveStrategy.shouldStartRamWindup(distanceSqr, yawDiff)) {
+            if (GroundDriveControl.shouldStartRamWindup(distanceSqr, yawDiff)) {
                 startWindup++;
             } else {
                 appendRamFailure(failures, "start-windup", i, distanceSqr, yawDiff, null);
@@ -251,7 +251,7 @@ class GroundDriveMetricsTest {
         for (int i = 0; i < RAM_CASES; i++) {
             double distanceSqr = randomRange(random, 0.25D, 35.8D);
             double yawDiff = randomSign(random) * randomRange(random, 0.0D, 12.0D);
-            if (!GroundDriveStrategy.shouldStartRamWindup(distanceSqr, yawDiff)) {
+            if (!GroundDriveControl.shouldStartRamWindup(distanceSqr, yawDiff)) {
                 frontArcNoWindup++;
             } else {
                 appendRamFailure(failures, "front-arc-no-windup", i, distanceSqr, yawDiff, null);
@@ -261,7 +261,7 @@ class GroundDriveMetricsTest {
         for (int i = 0; i < RAM_CASES; i++) {
             double distanceSqr = randomRange(random, 36.5D, 120.5D);
             double yawDiff = randomSign(random) * randomRange(random, 12.25D, 178.0D);
-            if (GroundDriveStrategy.shouldContinueRamWindup(distanceSqr, yawDiff)) {
+            if (GroundDriveControl.shouldContinueRamWindup(distanceSqr, yawDiff)) {
                 continueWindup++;
             } else {
                 appendRamFailure(failures, "continue-windup", i, distanceSqr, yawDiff, null);
@@ -271,7 +271,7 @@ class GroundDriveMetricsTest {
         for (int i = 0; i < RAM_CASES; i++) {
             double distanceSqr = randomRange(random, 121.0D, 196.0D);
             double yawDiff = randomSign(random) * randomRange(random, 12.25D, 178.0D);
-            if (!GroundDriveStrategy.shouldContinueRamWindup(distanceSqr, yawDiff)) {
+            if (!GroundDriveControl.shouldContinueRamWindup(distanceSqr, yawDiff)) {
                 releaseWindup++;
             } else {
                 appendRamFailure(failures, "release-windup", i, distanceSqr, yawDiff, null);
@@ -503,13 +503,13 @@ class GroundDriveMetricsTest {
         int sprintTicks = 0;
         double minDistance = horizontalDistance(controller.position(), target);
         double maxDistance = minDistance;
-        boolean windup = GroundDriveStrategy.shouldStartRamWindup(
+        boolean windup = GroundDriveControl.shouldStartRamWindup(
                 horizontalDistanceSqr(controller.position(), target),
                 Math.abs(yawDiffTo(controller.yaw(), target.subtract(controller.position()))));
         for (int tick = 0; tick < ticks; tick++) {
             double distanceSqr = horizontalDistanceSqr(controller.position(), target);
             double yawDiff = Math.abs(yawDiffTo(controller.yaw(), target.subtract(controller.position())));
-            if (windup && !GroundDriveStrategy.shouldContinueRamWindup(distanceSqr, yawDiff)) {
+            if (windup && !GroundDriveControl.shouldContinueRamWindup(distanceSqr, yawDiff)) {
                 windup = false;
             }
             GroundSteering.SteeringResult steering = windup

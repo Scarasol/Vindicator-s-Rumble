@@ -2,12 +2,18 @@ package com.scarasol.vindicatorsrumble.compat.guardvillagers;
 
 import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.entity.player.Player;
 import tallestegg.guardvillagers.configuration.GuardConfig;
 import tallestegg.guardvillagers.entities.Guard;
 
 public final class GuardVillagersCompat {
     private GuardVillagersCompat() {
+    }
+
+    public static boolean isVillageAlly(Entity first, Entity second) {
+        return first instanceof Guard && second instanceof Villager
+                || second instanceof Guard && first instanceof Villager;
     }
 
     public static boolean isPlayerAlly(Entity entity, Player player, boolean strict) {

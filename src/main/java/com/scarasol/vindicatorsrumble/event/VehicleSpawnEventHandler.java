@@ -30,6 +30,7 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.event.entity.EntityJoinLevelEvent;
+import net.minecraftforge.event.ForgeEventFactory;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.eventbus.api.EventPriority;
 import net.minecraftforge.fml.common.Mod;
@@ -66,14 +67,14 @@ public class VehicleSpawnEventHandler {
         }
 
         if (entity instanceof Raider raider && raider.getCurrentRaid() != null) {
-            if (isEligibleRaidVindicator(entity)) {
+            if (isEligibleRaidMember(raider)) {
                 trySpawnConfiguredVehicle(level, entity, CommonConfig.VINDICATOR_RAID_VEHICLE_CHANCE.get(), CommonConfig.VINDICATOR_RAID_VEHICLE_TYPES.get());
             }
             return;
         }
 
-        if (entity instanceof PatrollingMonster && entity.getSpawnType() == MobSpawnType.PATROL) {
-            trySpawnConfiguredVehicle(level, entity, CommonConfig.PATROL_VEHICLE_CHANCE.get(), CommonConfig.VINDICATOR_RAID_VEHICLE_TYPES.get());
+        if (entity instanceof PatrollingMonster patrol && entity.getSpawnType() == MobSpawnType.PATROL) {
+            onPatrolSpawn(event, level, patrol);
             return;
         }
 
@@ -87,8 +88,8 @@ public class VehicleSpawnEventHandler {
         }
     }
 
-    private static boolean isEligibleRaidVindicator(LivingEntity entity) {
-        if (entity.getType() != EntityType.VINDICATOR || !(entity instanceof Raider raider)) {
+    private static boolean isEligibleRaidMember(Raider raider) {
+        if (!raider.getType().is(ModTags.EntityTypes.VEHICLE_AI_USERS)) {
             return false;
         }
         Raid raid = raider.getCurrentRaid();
@@ -103,17 +104,67 @@ public class VehicleSpawnEventHandler {
     }
 
     private static void trySpawnConfiguredVehicle(ServerLevel level, LivingEntity owner, double chance, List<? extends String> configuredTypes) {
-        if (chance <= 0.0D || configuredTypes.isEmpty() || level.random.nextDouble() >= chance) {
+        createConfiguredVehicle(level, owner, chance, configuredTypes)
+                .ifPresent(vehicle -> boardGeneratedVehicle(level, owner, vehicle));
+    }
+
+    private static void onPatrolSpawn(EntityJoinLevelEvent event, ServerLevel level, PatrollingMonster patrol) {
+        if (patrol.getType().is(ModTags.EntityTypes.VEHICLE_AI_USERS)) {
+            trySpawnConfiguredVehicle(level, patrol, CommonConfig.PATROL_VEHICLE_CHANCE.get(), CommonConfig.VINDICATOR_RAID_VEHICLE_TYPES.get());
             return;
+        }
+        if (patrol.getType() != EntityType.PILLAGER || !EntityType.VINDICATOR.is(ModTags.EntityTypes.VEHICLE_AI_USERS)) {
+            return;
+        }
+        Optional<Entity> vehicle = createConfiguredVehicle(level, patrol, CommonConfig.PATROL_VEHICLE_CHANCE.get(), CommonConfig.VINDICATOR_RAID_VEHICLE_TYPES.get());
+        if (vehicle.isEmpty()) {
+            return;
+        }
+        PatrollingMonster driver = EntityType.VINDICATOR.create(level);
+        if (driver == null) {
+            vehicle.get().discard();
+            return;
+        }
+        driver.copyPosition(patrol);
+        driver.setPatrolLeader(patrol.isPatrolLeader());
+        if (patrol.hasPatrolTarget()) {
+            driver.setPatrolTarget(patrol.getPatrolTarget());
+        }
+        ForgeEventFactory.onFinalizeSpawn(driver, level, level.getCurrentDifficultyAt(driver.blockPosition()), MobSpawnType.PATROL, null, null);
+        driver.setNoAi(patrol.isNoAi());
+        driver.setInvulnerable(patrol.isInvulnerable());
+        driver.setCustomName(patrol.getCustomName());
+        driver.setCustomNameVisible(patrol.isCustomNameVisible());
+        if (patrol.isPersistenceRequired()) {
+            driver.setPersistenceRequired();
+        }
+        boolean added;
+        SUPPRESSED_VEHICLE_SPAWN.add(driver.getUUID());
+        try {
+            added = level.addFreshEntity(driver);
+        } finally {
+            SUPPRESSED_VEHICLE_SPAWN.remove(driver.getUUID());
+        }
+        if (!added) {
+            vehicle.get().discard();
+            return;
+        }
+        event.setCanceled(true);
+        boardGeneratedVehicle(level, driver, vehicle.get());
+    }
+
+    private static Optional<Entity> createConfiguredVehicle(ServerLevel level, LivingEntity owner, double chance, List<? extends String> configuredTypes) {
+        if (chance <= 0.0D || configuredTypes.isEmpty() || level.random.nextDouble() >= chance) {
+            return Optional.empty();
         }
 
         Optional<EntityType<?>> type = chooseVehicleType(level.random, configuredTypes);
         if (type.isEmpty()) {
             VehicleAiLogger.debug(owner, "Vehicle spawn skipped: no configured vehicle entity type is registered");
-            return;
+            return Optional.empty();
         }
 
-        spawnVehicleNear(level, owner, type.get());
+        return spawnVehicleNear(level, owner, type.get());
     }
 
     private static Optional<EntityType<?>> chooseVehicleType(RandomSource random, List<? extends String> configuredTypes) {
@@ -156,15 +207,15 @@ public class VehicleSpawnEventHandler {
         return Optional.of(WeightedRandom.entry(type, weight));
     }
 
-    private static void spawnVehicleNear(ServerLevel level, LivingEntity owner, EntityType<?> vehicleType) {
+    private static Optional<Entity> spawnVehicleNear(ServerLevel level, LivingEntity owner, EntityType<?> vehicleType) {
         Entity vehicle = vehicleType.create(level);
         if (vehicle == null) {
             VehicleAiLogger.debug(owner, "Vehicle spawn skipped: failed to create {}", ForgeRegistries.ENTITY_TYPES.getKey(vehicleType));
-            return;
+            return Optional.empty();
         }
         Optional<VehicleController> optionalController = VehicleControllers.create(vehicle);
         if (optionalController.isEmpty() || !optionalController.get().isControllable()) {
-            return;
+            return Optional.empty();
         }
         VehicleController controller = optionalController.get();
         boolean flying = controller.supportsFlightControl()
@@ -173,9 +224,14 @@ public class VehicleSpawnEventHandler {
         boolean airborneHover = controller.movementType() == VehicleMovementType.HELICOPTER && controller.supportsFlightControl();
         if (flying && (level.dimensionType().hasCeiling() || !isOpenSky(level, owner.blockPosition()))) {
             VehicleAiLogger.debug(owner, "Vehicle spawn skipped: aircraft requires an open-sky owner position");
-            return;
+            return Optional.empty();
         }
 
+        // Always-ticking vehicles can remain tracked in hidden sections that local entity queries skip.
+        List<AABB> existingVehicleBounds = new ArrayList<>();
+        for (Entity existing : level.getAllEntities()) {
+            VehicleControllers.create(existing).map(VehicleController::boundingBox).ifPresent(existingVehicleBounds::add);
+        }
         for (int attempt = 0; attempt < SPAWN_ATTEMPTS; attempt++) {
             Vec3 position = randomSpawnPosition(level, owner.blockPosition(), level.random, vehicle, airborneHover);
             if (position == null) {
@@ -193,7 +249,9 @@ public class VehicleSpawnEventHandler {
                     || !level.noCollision(vehicle, clearance)
                     || (controller.movementType() != VehicleMovementType.SHIP && level.containsAnyLiquid(clearance))
                     || (flying && !hasOpenSky(level, clearance, owner.getY()))
-                    || (!flying && !hasGroundSupport(level, clearance, controller.movementType() == VehicleMovementType.SHIP))) {
+                    || (!flying && !hasGroundSupport(level, clearance, controller.movementType() == VehicleMovementType.SHIP))
+                    // OBB vehicles can opt out of vanilla entity collision and still push overlapping vehicles.
+                    || existingVehicleBounds.stream().anyMatch(clearance::intersects)) {
                 continue;
             }
             boolean added;
@@ -204,14 +262,15 @@ public class VehicleSpawnEventHandler {
                 SUPPRESSED_VEHICLE_SPAWN.remove(vehicle.getUUID());
             }
             if (added) {
-                VehicleAiLogger.debug(owner, "Spawned vehicle {} near generated mob airborneHover={}", ForgeRegistries.ENTITY_TYPES.getKey(vehicleType), airborneHover);
-                boardGeneratedVehicle(level, owner, vehicle);
-                return;
+                VehicleAiLogger.debug(owner, "Spawned vehicle {} near generated mob vehicle={} position={} airborneHover={}",
+                        ForgeRegistries.ENTITY_TYPES.getKey(vehicleType), vehicle.getId(), vehicle.position(), airborneHover);
+                return Optional.of(vehicle);
             }
-            return;
+            return Optional.empty();
         }
 
         VehicleAiLogger.debug(owner, "Vehicle spawn skipped: no collision-free nearby position for {}", ForgeRegistries.ENTITY_TYPES.getKey(vehicleType));
+        return Optional.empty();
     }
 
     private static void boardGeneratedVehicle(ServerLevel level, LivingEntity owner, Entity vehicle) {

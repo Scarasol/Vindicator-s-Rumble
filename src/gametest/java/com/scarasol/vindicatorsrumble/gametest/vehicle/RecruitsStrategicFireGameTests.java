@@ -23,6 +23,9 @@ import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.common.util.FakePlayer;
 import net.minecraftforge.common.util.FakePlayerFactory;
 import net.minecraftforge.event.entity.EntityJoinLevelEvent;
+import net.minecraftforge.event.entity.EntityMountEvent;
+import net.minecraftforge.event.entity.living.LivingDeathEvent;
+import net.minecraftforge.eventbus.api.EventPriority;
 import net.minecraftforge.gametest.GameTestHolder;
 import net.minecraftforge.gametest.PrefixGameTestTemplate;
 import net.minecraftforge.registries.ForgeRegistries;
@@ -32,6 +35,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 @GameTestHolder("vindicators_rumble_recruits")
 @PrefixGameTestTemplate(false)
@@ -88,6 +92,59 @@ public final class RecruitsStrategicFireGameTests {
             helper.assertTrue(target.isAlive() && second.getTarget() == target, "Cancellation affected another participant");
             second.stopRiding();
             helper.assertTrue(second.getTarget() == null && target.isRemoved(), "Last participant left an orphan target");
+            helper.succeed();
+        }
+    }
+
+    @GameTest(batch = "recruits_strategic_fire", template = "empty", timeoutTicks = 40)
+    public static void cancelledDeathPreservesTheCommandTarget(GameTestHelper helper) {
+        try (Fixture fixture = fixture(helper, "bowman", 1)) {
+            fixture.command(true);
+            AbstractRecruitEntity recruit = fixture.recruits().get(0);
+            ArmorStand target = target(helper, recruit);
+            int[] deaths = {0};
+            Consumer<LivingDeathEvent> cancel = event -> {
+                if (event.getEntity() != recruit) return;
+                deaths[0]++;
+                event.setCanceled(true);
+                recruit.setHealth(recruit.getMaxHealth());
+            };
+            MinecraftForge.EVENT_BUS.addListener(EventPriority.LOWEST, cancel);
+            try {
+                recruit.setHealth(0.0F);
+                recruit.die(fixture.level().damageSources().genericKill());
+                helper.assertTrue(deaths[0] == 1 && recruit.isAlive() && !recruit.isRemoved(),
+                        "Recruit did not survive the canceled native death");
+                helper.assertTrue(recruit.getVehicle() == fixture.vehicle() && recruit.getTarget() == target
+                                && target.isAlive() && !target.isRemoved(),
+                        "Canceled death released the live recruit's command target");
+                helper.assertTrue(((BowmanEntity) recruit).getShouldStrategicFire(),
+                        "Canceled death canceled the native fire command");
+            } finally {
+                MinecraftForge.EVENT_BUS.unregister(cancel);
+            }
+            helper.succeed();
+        }
+    }
+
+    @GameTest(batch = "recruits_strategic_fire", template = "empty", timeoutTicks = 40)
+    public static void lateCancelledDismountPreservesTheCommandTarget(GameTestHelper helper) {
+        try (Fixture fixture = fixture(helper, "recruit", 1)) {
+            fixture.command(true);
+            AbstractRecruitEntity recruit = fixture.recruits().get(0);
+            ArmorStand target = target(helper, recruit);
+            Consumer<EntityMountEvent> cancel = event -> {
+                if (event.isDismounting() && event.getEntityMounting() == recruit) event.setCanceled(true);
+            };
+            MinecraftForge.EVENT_BUS.addListener(EventPriority.LOWEST, cancel);
+            try {
+                recruit.stopRiding();
+                helper.assertTrue(recruit.getVehicle() == fixture.vehicle() && recruit.getTarget() == target
+                                && target.isAlive() && !target.isRemoved(),
+                        "Canceled dismount released the mounted recruit's command target");
+            } finally {
+                MinecraftForge.EVENT_BUS.unregister(cancel);
+            }
             helper.succeed();
         }
     }

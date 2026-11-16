@@ -1,0 +1,26 @@
+gradle.beforeProject { project ->
+    project.configurations.configureEach {
+        if (name.toLowerCase(java.util.Locale.ROOT).contains('runtime')) {
+            exclude group: 'curse.maven', module: 'sona-survival-101-1023345'
+            exclude group: 'curse.maven', module: 'zombie-survival-kit-839371'
+        }
+    }
+    project.afterEvaluate {
+        project.sourceSets.gameTest.java {
+            setSrcDirs(['src/gametest/accuracy/java', 'src/gametest/java'])
+            include 'com/scarasol/vindicatorsrumble/gametest/accuracy/**'
+            include 'com/scarasol/vindicatorsrumble/gametest/vehicle/VehicleNavigationIsolationGameTests.java'
+        }
+        project.sourceSets.gameTest.resources.srcDir('src/gametest/accuracy/resources')
+        project.tasks.named('compileGameTestJava').configure {
+            destinationDirectory = project.layout.buildDirectory.dir('vehicle-base-accuracy/classes')
+        }
+        project.sourceSets.gameTest.output.classesDirs.setFrom(
+                project.layout.buildDirectory.dir('vehicle-base-accuracy/classes'))
+        project.minecraft.runs.gameTestServer {
+            property 'forge.enabledGameTestNamespaces', 'vindicators_rumble,vindicators_rumble_isolation'
+            property 'forge.logging.console.level', 'info'
+            args '--mixin', 'vindicators_rumble.gametest-accuracy.mixins.json'
+        }
+    }
+}

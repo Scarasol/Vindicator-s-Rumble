@@ -29,9 +29,7 @@ import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraftforge.event.entity.EntityJoinLevelEvent;
-import net.minecraftforge.event.entity.EntityLeaveLevelEvent;
 import net.minecraftforge.event.entity.EntityMountEvent;
-import net.minecraftforge.event.entity.living.LivingDeathEvent;
 import net.minecraftforge.event.entity.living.LivingChangeTargetEvent;
 import net.minecraftforge.event.entity.living.LivingEvent;
 import net.minecraftforge.event.entity.player.PlayerInteractEvent;
@@ -76,40 +74,24 @@ public class VehicleAiEventHandler {
         }
     }
 
-    @SubscribeEvent
-    public static void onEntityLeaveLevel(EntityLeaveLevelEvent event) {
-        if (event.getLevel().isClientSide()) {
+    public static void releaseEntityResources(Entity entity) {
+        if (entity.level().isClientSide()) {
             return;
         }
 
-        Entity entity = event.getEntity();
         VehicleThreats.clearEntity(entity);
         if (ModCompat.isRecruitsLoaded()) {
             RecruitsCompat.release(entity);
         }
         if (entity instanceof Mob mob) {
-            clearMobVehicleState(mob);
-            VehicleAiMemory.setVehicleAiEnabled(mob, false);
+            clearDebugTargetGlow(mob);
+            VehicleAiMemory.clear(mob);
+            VehicleClaimManager.releaseAll(mob);
         }
         if (VehicleControllers.create(entity).isPresent()) {
             VehicleSmokeDefense.clear(entity);
             VehicleAiMemory.clearVehicle(entity);
             VehicleClaimManager.releaseVehicle(entity);
-        }
-    }
-
-    @SubscribeEvent
-    public static void onLivingDeath(LivingDeathEvent event) {
-        if (!event.getEntity().level().isClientSide()) {
-            VehicleThreats.clearEntity(event.getEntity());
-        }
-        if (!event.getEntity().level().isClientSide()
-                && event.getEntity() instanceof Mob mob) {
-            clearMobVehicleState(mob);
-            VehicleAiMemory.setVehicleAiEnabled(mob, false);
-            if (ModCompat.isRecruitsLoaded()) {
-                RecruitsCompat.release(mob);
-            }
         }
     }
 
@@ -141,11 +123,34 @@ public class VehicleAiEventHandler {
         }
     }
 
-    private static void clearMobVehicleState(Mob mob) {
-        clearDebugTargetGlow(mob);
+    public static void onVehicleDismounted(Entity passenger, Entity vehicle) {
+        if (passenger.level().isClientSide() || !(passenger instanceof Mob mob)) {
+            return;
+        }
+        // The rider is detached, but the old seat is still available until removePassenger runs.
+        VehicleControllers.create(vehicle).ifPresent(controller -> {
+            if (controller.canDrive(mob)) {
+                VehicleSmokeDefense.clearDriver(vehicle);
+            }
+            controller.stopWeaponControl(mob);
+        });
+        if (ModCompat.isRecruitsLoaded()) {
+            RecruitsCompat.release(mob);
+        }
+        setDebugVehicleGlow(vehicle, false);
         VehicleTargetRangeManager.remove(mob);
         VehicleAiMemory.clear(mob);
         VehicleClaimManager.releaseAll(mob);
+    }
+
+    public static void onVehicleMounted(Entity passenger, Entity vehicle) {
+        if (passenger.level().isClientSide() || !(passenger instanceof Mob mob)
+                || !VehicleAiMemory.isVehicleAiEnabled(mob)
+                || mob.getVehicle() != vehicle || !vehicle.hasPassenger(mob)
+                || VehicleControllers.create(vehicle).isEmpty()) {
+            return;
+        }
+        VehicleTargetRangeManager.apply(mob);
     }
 
     private static void injectVehicleAiGoals(Mob mob) {
@@ -181,30 +186,7 @@ public class VehicleAiEventHandler {
             if (hasNonFriendlyVehiclePassenger(player, event.getEntityBeingMounted())) {
                 event.setCanceled(true);
             }
-            return;
         }
-        if (!(event.getEntityMounting() instanceof Mob mob)) {
-            return;
-        }
-        if (event.isDismounting()) {
-            VehicleControllers.create(event.getEntityBeingMounted())
-                    .filter(controller -> controller.canDrive(mob))
-                    .ifPresent(controller -> VehicleSmokeDefense.clearDriver(controller.entity()));
-            if (ModCompat.isRecruitsLoaded()) {
-                RecruitsCompat.release(mob);
-            }
-            clearMobVehicleState(mob);
-            return;
-        }
-
-        if (!event.isMounting() || !VehicleAiMemory.isVehicleAiEnabled(mob)) {
-            return;
-        }
-        if (VehicleControllers.create(event.getEntityBeingMounted()).isEmpty()) {
-            return;
-        }
-
-        VehicleTargetRangeManager.apply(mob);
     }
 
     private static boolean hasNonFriendlyVehiclePassenger(Player player, Entity vehicle) {

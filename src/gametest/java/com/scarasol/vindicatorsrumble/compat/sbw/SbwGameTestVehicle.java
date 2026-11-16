@@ -1,6 +1,7 @@
 package com.scarasol.vindicatorsrumble.compat.sbw;
 
 import com.atsuishio.superbwarfare.entity.vehicle.base.VehicleEntity;
+import com.atsuishio.superbwarfare.config.server.MiscConfig;
 import com.atsuishio.superbwarfare.data.gun.GunProp;
 import com.atsuishio.superbwarfare.entity.projectile.IglaMissileEntity;
 import com.atsuishio.superbwarfare.entity.projectile.MissileProjectile;
@@ -177,6 +178,36 @@ public final class SbwGameTestVehicle {
 
     public static void collisionHit(Entity entity, LivingEntity attacker, float amount) {
         entity.hurt(ModDamageTypes.causeVehicleStrikeDamage(entity.level().registryAccess(), attacker, attacker), amount);
+    }
+
+    public static void crushEntities(Entity entity, boolean forceDamage) {
+        boolean previous = MiscConfig.FORCE_DAMAGE_MODE.get();
+        try {
+            MiscConfig.FORCE_DAMAGE_MODE.set(forceDamage);
+            ((VehicleEntity) entity).crushEntities();
+        } finally {
+            MiscConfig.FORCE_DAMAGE_MODE.set(previous);
+        }
+    }
+
+    public static void initializeCollisionBounds(Entity entity) {
+        VehicleEntity vehicle = (VehicleEntity) entity;
+        vehicle.updateOBB();
+        vehicle.refreshBoundingBoxFromOBBs();
+    }
+
+    public static String crushDiagnostics(Entity entity) {
+        VehicleEntity vehicle = (VehicleEntity) entity;
+        return "vehicle=" + vehicle.position() + ", bounds=" + vehicle.getCombinedAABB()
+                + ", candidates=" + vehicle.level().getEntities(vehicle, vehicle.getCombinedAABB()).stream()
+                .map(other -> other.getType() + "@" + other.position() + "/riding=" + other.isPassenger()
+                        + "/inside=" + vehicle.isInObb(other, vehicle.getDeltaMovement()))
+                .toList();
+    }
+
+    public static void directVehicleStrike(Entity target, Entity vehicle, float amount) {
+        target.hurt(ModDamageTypes.causeVehicleStrikeDamage(target.level().registryAccess(), vehicle,
+                vehicle.getFirstPassenger()), amount);
     }
 
     public static void softenMobDamage(Entity entity) {

@@ -1,0 +1,60 @@
+// Run against the optional Pillager's Gun checkout, never add it to production dependencies.
+gradle.beforeProject { project ->
+    project.configurations.configureEach {
+        exclude group: 'curse.maven', module: 'oculus-581495'
+        exclude group: 'curse.maven', module: 'embeddium-908741'
+        if (name.toLowerCase(java.util.Locale.ROOT).contains('runtime')) {
+            exclude group: 'curse.maven', module: 'sona-survival-101-1023345'
+            exclude group: 'curse.maven', module: 'zombie-survival-kit-839371'
+        }
+    }
+    project.afterEvaluate {
+        def root = new File(project.property('vehicleProject').toString()).canonicalFile
+        def reviewedClasses = new File(root, 'build/classes/java/main')
+        def reviewedResources = new File(root, 'build/resources/main')
+        if (!new File(reviewedClasses, 'com/scarasol/vindicatorsrumble/compat/sbw/PillagersGunAccuracy.class').isFile()) {
+            throw new GradleException('Compile current vehicle sources before running accuracy compatibility tests')
+        }
+        def currentVehicle = project.files(reviewedClasses, reviewedResources)
+        project.sourceSets.all { source ->
+            source.compileClasspath = currentVehicle + source.compileClasspath.filter {
+                !it.name.startsWith('vindicators_rumble-')
+            }
+            source.runtimeClasspath = currentVehicle + source.runtimeClasspath.filter {
+                !it.name.startsWith('vindicators_rumble-')
+            }
+        }
+        project.sourceSets.create('reviewedVehicle') {
+            java.setSrcDirs([])
+            resources.setSrcDirs([])
+            output.classesDirs.setFrom(reviewedClasses)
+            output.resourcesDir = reviewedResources
+        }
+        project.tasks.named('compileReviewedVehicleJava').configure { enabled = false }
+        project.tasks.named('processReviewedVehicleResources').configure { enabled = false }
+        project.sourceSets.gameTest.java.setSrcDirs([
+                new File(root, 'src/gametest/pillagersgun/java'),
+                new File(root, 'src/gametest/accuracy/java')
+        ])
+        project.tasks.named('compileGameTestJava').configure {
+            destinationDirectory = project.layout.buildDirectory.dir('vehicle-accuracy/classes')
+        }
+        project.sourceSets.gameTest.output.classesDirs.setFrom(
+                project.layout.buildDirectory.dir('vehicle-accuracy/classes'))
+        project.sourceSets.gameTest.resources.srcDir(new File(root, 'src/gametest/accuracy/resources'))
+        project.minecraft.runs.gameTestServer {
+            property 'forge.enabledGameTestNamespaces', 'pillagers_gun'
+            property 'forge.logging.console.level', 'info'
+            args '--mixin', 'vindicators_rumble.mixins.json',
+                    '--mixin', 'vindicators_rumble.gametest-accuracy.mixins.json'
+            mods {
+                vindicators_rumble {
+                    source project.sourceSets.reviewedVehicle
+                }
+            }
+        }
+        project.tasks.withType(JavaExec).configureEach {
+            classpath = currentVehicle + classpath.filter { !it.name.startsWith('vindicators_rumble-') }
+        }
+    }
+}

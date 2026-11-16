@@ -6,18 +6,23 @@ import com.scarasol.vindicatorsrumble.compat.VehicleControllers;
 import com.scarasol.vindicatorsrumble.compat.sbw.SbwGameTestVehicle;
 import com.scarasol.vindicatorsrumble.config.CommonConfig;
 import com.scarasol.vindicatorsrumble.entity.goal.vehicle.common.VehicleAiGoal;
+import com.scarasol.vindicatorsrumble.init.ModTags;
 import com.mojang.logging.LogUtils;
 import net.minecraft.core.BlockPos;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.gametest.framework.AfterBatch;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.tags.TagKey;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.MobSpawnType;
 import net.minecraft.world.entity.monster.Pillager;
+import net.minecraft.world.entity.monster.PatrollingMonster;
 import net.minecraft.world.entity.raid.Raid;
 import net.minecraft.world.entity.raid.Raider;
 import net.minecraft.world.effect.MobEffectInstance;
@@ -124,19 +129,34 @@ public final class VehicleSpawnGameTests {
             fixture.expectVehicles(0, "An ordinary pillager was misidentified as a patrol member");
             fixture.clearEntities();
 
-            Pillager follower = fixture.spawn(EntityType.PILLAGER, MobSpawnType.PATROL);
+            PatrollingMonster follower = fixture.spawnPatrol();
             fixture.expectMounted(follower, TRUCK);
+            helper.assertTrue(follower.getType() == EntityType.VINDICATOR,
+                    "An untagged patrol pillager must be replaced with a Vindicator driver");
             helper.assertTrue(follower.goalSelector.getAvailableGoals().stream()
                             .anyMatch(goal -> goal.getGoal() instanceof VehicleAiGoal),
-                    "Patrol pillager did not receive vehicle AI");
+                    "Patrol driver did not receive vehicle AI");
             fixture.expectVehicles(1, "Patrol passengers recursively generated vehicles");
             fixture.clearEntities();
 
             Pillager leader = fixture.create(EntityType.PILLAGER, MobSpawnType.PATROL);
             leader.setPatrolLeader(true);
-            leader.findPatrolTarget();
-            helper.assertTrue(fixture.level.addFreshEntity(leader), "Could not add patrol leader fixture");
-            fixture.expectMounted(leader, TRUCK);
+            leader.setItemSlot(EquipmentSlot.HEAD, Raid.getLeaderBannerInstance());
+            BlockPos patrolTarget = fixture.origin.offset(120, 0, 70);
+            leader.setPatrolTarget(patrolTarget);
+            leader.setCustomName(Component.literal("Patrol captain"));
+            PatrollingMonster captain = fixture.spawnPatrol(leader);
+            fixture.expectMounted(captain, TRUCK);
+            helper.assertTrue(captain.getType() == EntityType.VINDICATOR && captain.isPatrolLeader(),
+                    "Patrol replacement lost the captain's role");
+            helper.assertTrue(patrolTarget.equals(captain.getPatrolTarget()),
+                    "Patrol replacement lost its vanilla patrol target");
+            helper.assertTrue(net.minecraft.world.item.ItemStack.matches(
+                            captain.getItemBySlot(EquipmentSlot.HEAD), Raid.getLeaderBannerInstance()),
+                    "Patrol replacement lost the captain's banner");
+            helper.assertTrue(leader.getCustomName().equals(captain.getCustomName())
+                            && captain.getSpawnType() == MobSpawnType.PATROL,
+                    "Patrol replacement lost its name or spawn reason");
             fixture.clearEntities();
 
             CommonConfig.NATURAL_VEHICLE_CHANCE.set(1.0D);
@@ -284,13 +304,93 @@ public final class VehicleSpawnGameTests {
             fixture.expectMounted(fixture.spawn(EntityType.VINDICATOR, MobSpawnType.NATURAL), TRUCK);
             fixture.expectVehicles(1, "The raid wave threshold must not restrict ordinary generation");
             fixture.clearEntities();
-            fixture.expectMounted(fixture.spawn(EntityType.PILLAGER, MobSpawnType.PATROL), TRUCK);
+            fixture.expectMounted(fixture.spawnPatrol(), TRUCK);
             fixture.expectVehicles(1, "The raid wave threshold must not restrict patrol generation");
             fixture.clearEntities();
 
             CommonConfig.VINDICATOR_RAID_MIN_BAD_OMEN_LEVEL.set(4);
             fixture.spawnRaidVindicator(raid, 4);
             fixture.expectVehicles(0, "Meeting the wave threshold must not bypass the Bad Omen threshold");
+        }
+        helper.succeed();
+    }
+
+    @GameTest(batch = "vehicle_spawning", template = "empty", timeoutTicks = 40)
+    public static void raidAndPatrolVehicleTagContract(GameTestHelper helper) {
+        helper.assertTrue(EntityType.VINDICATOR.is(ModTags.EntityTypes.VEHICLE_AI_USERS),
+                "Default vehicle AI tag must retain Vindicators");
+        helper.assertTrue(!EntityType.PILLAGER.is(ModTags.EntityTypes.VEHICLE_AI_USERS),
+                "Default vehicle AI tag must not include pillagers");
+        try (Fixture fixture = new Fixture(helper)) {
+            CommonConfig.NATURAL_VEHICLE_CHANCE.set(1.0D);
+            CommonConfig.PATROL_VEHICLE_CHANCE.set(1.0D);
+            CommonConfig.VINDICATOR_RAID_MIN_BAD_OMEN_LEVEL.set(0);
+            CommonConfig.VINDICATOR_RAID_VEHICLE_CHANCE.set(1.0D);
+            Raid raid = new Raid(9986, fixture.level, fixture.origin);
+
+            fixture.spawnRaidMember(EntityType.PILLAGER, raid, 2);
+            fixture.expectVehicles(0, "An untagged raid pillager generated a vehicle or got an ordinary roll");
+            fixture.clearEntities();
+
+            fixture.vehicleAiUser(EntityType.PILLAGER, true);
+            Raider pillager = fixture.spawnRaidMember(EntityType.PILLAGER, raid, 2);
+            fixture.expectMounted(pillager, TRUCK);
+            fixture.expectVehicles(1, "A tagged raid pillager must generate exactly one vehicle");
+            fixture.clearEntities();
+            fixture.spawnRaidMember(EntityType.PILLAGER, raid, 1);
+            fixture.expectVehicles(0, "A tagged pillager bypassed the raid wave threshold");
+            fixture.clearEntities();
+
+            PatrollingMonster taggedPatrol = fixture.spawnPatrol();
+            helper.assertTrue(taggedPatrol.getType() == EntityType.PILLAGER,
+                    "A tagged patrol pillager must not be replaced");
+            fixture.expectMounted(taggedPatrol, TRUCK);
+            fixture.expectVehicles(1, "A tagged patrol generated duplicate vehicles");
+            fixture.clearEntities();
+            fixture.vehicleAiUser(EntityType.PILLAGER, false);
+
+            fixture.vehicleAiUser(EntityType.EVOKER, true);
+            fixture.expectMounted(fixture.spawnRaidMember(EntityType.EVOKER, raid, 2), TRUCK);
+            fixture.expectVehicles(1, "Raid generation must accept other tagged Raider types");
+            fixture.clearEntities();
+
+            fixture.vehicleAiUser(EntityType.VINDICATOR, false);
+            fixture.spawnRaidVindicator(raid, 2);
+            fixture.expectVehicles(0, "An untagged raid Vindicator generated a vehicle");
+            fixture.clearEntities();
+            helper.assertTrue(fixture.spawnPatrol().getType() == EntityType.PILLAGER,
+                    "A patrol must remain unchanged when the fallback Vindicator is also untagged");
+            fixture.expectVehicles(0, "A patrol generated a vehicle without a tagged driver");
+            fixture.clearEntities();
+            fixture.vehicleAiUser(EntityType.VINDICATOR, true);
+
+            CommonConfig.PATROL_VEHICLE_CHANCE.set(0.0D);
+            helper.assertTrue(fixture.spawnPatrol().getType() == EntityType.PILLAGER,
+                    "A patrol without a vehicle roll must not be replaced");
+            fixture.expectVehicles(0, "A disabled patrol got an ordinary vehicle roll");
+            fixture.clearEntities();
+            CommonConfig.PATROL_VEHICLE_CHANCE.set(1.0D);
+
+            CommonConfig.VINDICATOR_RAID_VEHICLE_TYPES.set(List.of(HELICOPTER));
+            fixture.ceiling(Blocks.STONE.defaultBlockState());
+            helper.assertTrue(fixture.spawnPatrol().getType() == EntityType.PILLAGER,
+                    "A patrol must not be replaced when its vehicle cannot be placed");
+            fixture.expectVehicles(0, "A patrol aircraft generated indoors");
+            fixture.clearEntities();
+            fixture.ceiling(Blocks.AIR.defaultBlockState());
+            CommonConfig.VINDICATOR_RAID_VEHICLE_TYPES.set(List.of(TRUCK));
+
+            Consumer<EntityJoinLevelEvent> rejectDriver = event -> {
+                if (event.getEntity().getType() == EntityType.VINDICATOR) event.setCanceled(true);
+            };
+            MinecraftForge.EVENT_BUS.addListener(EventPriority.HIGHEST, rejectDriver);
+            try {
+                helper.assertTrue(fixture.spawnPatrol().getType() == EntityType.PILLAGER,
+                        "A rejected replacement must leave the original patrol intact");
+                fixture.expectVehicles(0, "A rejected patrol replacement left an orphan vehicle");
+            } finally {
+                MinecraftForge.EVENT_BUS.unregister(rejectDriver);
+            }
         }
         helper.succeed();
     }
@@ -546,6 +646,7 @@ public final class VehicleSpawnGameTests {
         private final BlockPos origin;
         private final AABB area;
         private final Map<BlockPos, BlockState> blocks = new HashMap<>();
+        private final Map<EntityType<?>, List<TagKey<EntityType<?>>>> originalTags = new HashMap<>();
         private final boolean ai = CommonConfig.ENABLE_VEHICLE_AI.get();
         private final boolean debug = CommonConfig.VEHICLE_AI_DEBUG.get();
         private final boolean needsAmmo = CommonConfig.VEHICLE_AI_NEEDS_AMMO.get();
@@ -588,11 +689,39 @@ public final class VehicleSpawnGameTests {
         }
 
         private Raider spawnRaidVindicator(Raid raid, int wave) {
-            Raider raider = EntityType.VINDICATOR.create(level);
-            helper.assertTrue(raider != null, "Missing raid Vindicator fixture");
+            return spawnRaidMember(EntityType.VINDICATOR, raid, wave);
+        }
+
+        private Raider spawnRaidMember(EntityType<? extends Raider> type, Raid raid, int wave) {
+            Raider raider = type.create(level);
+            helper.assertTrue(raider != null, "Missing raid fixture " + type);
             raid.joinRaid(wave, raider, origin.below(), false);
-            helper.assertTrue(level.getEntity(raider.getUUID()) == raider, "Could not add raid Vindicator fixture");
+            helper.assertTrue(level.getEntity(raider.getUUID()) == raider, "Could not add raid fixture " + type);
             return raider;
+        }
+
+        private PatrollingMonster spawnPatrol() {
+            return spawnPatrol(create(EntityType.PILLAGER, MobSpawnType.PATROL));
+        }
+
+        private PatrollingMonster spawnPatrol(Pillager original) {
+            if (level.addFreshEntity(original)) {
+                return original;
+            }
+            helper.assertTrue(level.getEntity(original.getUUID()) == null,
+                    "Replaced patrol pillager was also added to the world");
+            List<PatrollingMonster> drivers = level.getEntitiesOfClass(PatrollingMonster.class, area,
+                    mob -> VehicleControllers.forMob(mob).map(controller -> controller.canDrive(mob)).orElse(false));
+            helper.assertTrue(drivers.size() == 1, "Patrol replacement must produce exactly one driver");
+            return drivers.get(0);
+        }
+
+        private void vehicleAiUser(EntityType<?> type, boolean enabled) {
+            originalTags.putIfAbsent(type, type.getTags().toList());
+            List<TagKey<EntityType<?>>> tags = new ArrayList<>(type.getTags().toList());
+            tags.remove(ModTags.EntityTypes.VEHICLE_AI_USERS);
+            if (enabled) tags.add(ModTags.EntityTypes.VEHICLE_AI_USERS);
+            type.builtInRegistryHolder().bindTags(tags);
         }
 
         private void expectMounted(Mob owner, String type) {
@@ -637,6 +766,7 @@ public final class VehicleSpawnGameTests {
             if (closed) return;
             closed = true;
             clearEntities();
+            originalTags.forEach((type, tags) -> type.builtInRegistryHolder().bindTags(tags));
             blocks.forEach(level::setBlockAndUpdate);
             CommonConfig.ENABLE_VEHICLE_AI.set(ai);
             CommonConfig.VEHICLE_AI_DEBUG.set(debug);
