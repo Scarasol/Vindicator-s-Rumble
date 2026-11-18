@@ -1,0 +1,18 @@
+// Run the paired ground tests in an isolated build and keep the regular test world intact.
+gradle.beforeProject { project ->
+    project.layout.buildDirectory.set(project.file('build/limitless-ab'))
+    project.configurations.configureEach {
+        if (name.toLowerCase(java.util.Locale.ROOT).contains('runtime')) {
+            exclude group: 'curse.maven', module: 'sona-survival-101-1023345'
+            exclude group: 'curse.maven', module: 'zombie-survival-kit-839371'
+        }
+    }
+    project.afterEvaluate {
+        project.minecraft.runs.gameTestServer {
+            property 'forge.logging.console.level', 'info'
+            if (project.hasProperty('limitlessObstacleTrace')) {
+                property 'vindicatorsrumble.limitlessObstacleTrace', 'true'
+            }
+        }
+    }
+}

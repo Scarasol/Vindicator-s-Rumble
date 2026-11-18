@@ -109,6 +109,15 @@ class ModIsolationTest {
     }
 
     @Test
+    void releaseDoesNotBundleOrRequireLimitlessVehicle() throws Exception {
+        try (JarFile release = new JarFile(System.getProperty("vindicatorsRumble.releaseJar"));
+             InputStream metadata = release.getInputStream(release.getJarEntry("META-INF/mods.toml"))) {
+            assertFalse(release.stream().anyMatch(entry -> entry.getName().startsWith("org/ywzj/vehicle/")));
+            assertFalse(new String(metadata.readAllBytes(), StandardCharsets.UTF_8).contains("modId=\"ywzj_vehicle\""));
+        }
+    }
+
+    @Test
     void vehicleSizedPathfindingIsRegisteredAsACommonMixin() throws Exception {
         try (InputStream input = getClass().getResourceAsStream("/vindicators_rumble.mixins.json")) {
             assertNotNull(input);
@@ -170,6 +179,7 @@ class ModIsolationTest {
                     .filter(name -> name.toLowerCase(Locale.ROOT).contains("gametest")
                             || name.startsWith("data/vindicators_rumble_benchmark/")
                             || name.startsWith("data/vindicators_rumble_isolation/")
+                            || name.startsWith("data/vindicators_rumble_limitless/")
                             || name.startsWith("data/vindicators_rumble_smoke/"))
                     .toList();
             assertTrue(leaked.isEmpty(), () -> "Test-only release entries: " + leaked);

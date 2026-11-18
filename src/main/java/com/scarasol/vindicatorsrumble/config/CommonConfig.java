@@ -76,7 +76,7 @@ public class CommonConfig {
         VINDICATOR_RAID_MIN_WAVE = BUILDER.comment("First raid wave whose tagged members may spawn vehicles. Waves start at 1; Bad Omen and vehicle chance requirements still apply.")
                 .defineInRange("Vindicator Raid Minimum Wave", 2, 1, Integer.MAX_VALUE);
         VINDICATOR_RAID_VEHICLE_TYPES = BUILDER.comment("""
-                Vehicle entity type IDs and their weights for generated vehicles owned by mobs implementing Minecraft's Enemy interface.
+                Vehicle entity type IDs or Limitless Vehicle pack IDs and their weights for generated vehicles owned by mobs implementing Minecraft's Enemy interface.
                 Used by every generation rule, including raids, patrols, and ordinary spawns. Non-Enemy mobs use Village Defender Vehicle Types.
                 Format: "superbwarfare:sodayo_pick_up_hmg, 5" means this vehicle has a spawn weight of 5.
                 """).defineList("Vindicator Raid Vehicle Types", List.of(
@@ -86,7 +86,7 @@ public class CommonConfig {
         VILLAGE_DEFENDER_VEHICLE_CHANCE = BUILDER.comment("Chance for Guard Villagers or Recruits generated near villages to spawn a nearby vehicle.")
                 .defineInRange("Village Defender Vehicle Chance", 0.0D, 0.0D, 1.0D);
         VILLAGE_DEFENDER_VEHICLE_TYPES = BUILDER.comment("""
-                Vehicle entity type IDs and their weights for generated vehicles owned by mobs not implementing Minecraft's Enemy interface.
+                Vehicle entity type IDs or Limitless Vehicle pack IDs and their weights for generated vehicles owned by mobs not implementing Minecraft's Enemy interface.
                 Used by every generation rule, including ordinary spawns of Guard Villagers, Recruits, and other tagged non-Enemy mobs.
                 Format: "superbwarfare:sodayo_pick_up_hmg, 5" means this vehicle has a spawn weight of 5.
                 """).defineList("Village Defender Vehicle Types", List.of(

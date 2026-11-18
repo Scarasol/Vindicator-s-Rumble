@@ -50,6 +50,11 @@ public interface VehicleController {
 
     Vec3 velocity();
 
+    /** Whether the vehicle's movement is obstructed horizontally. */
+    default boolean hasHorizontalCollision() {
+        return this.entity().horizontalCollision;
+    }
+
     double estimatedHorizontalStoppingDistance();
 
     /** Full-lock turn radius at current speed; zero when no estimate is available. */

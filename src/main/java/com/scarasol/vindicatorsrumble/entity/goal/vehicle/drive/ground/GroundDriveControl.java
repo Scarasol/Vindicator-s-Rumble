@@ -873,7 +873,7 @@ final class GroundDriveControl {
             this.lastPosition = position;
             return;
         }
-        if (this.controller.entity().horizontalCollision
+        if (this.controller.hasHorizontalCollision()
                 && this.controller.velocity().horizontalDistanceSqr() < 0.003D) {
             this.beginManeuver(request, "ground collision");
             return;
@@ -921,13 +921,13 @@ final class GroundDriveControl {
                 .orElse(0.0D);
         this.maneuverTurnDirection = selectManeuverTurnDirection(this.maneuverClearance, yawDiff, previousTurnDirection);
         GroundManeuverStep initialStep = selectInitialManeuverStep(this.maneuverClearance, false);
-        this.maneuverReverseStarted = this.controller.entity().horizontalCollision
-                || initialStep == GroundManeuverStep.BACK_STRAIGHT;
+        boolean horizontalCollision = this.controller.hasHorizontalCollision();
+        this.maneuverReverseStarted = horizontalCollision || initialStep == GroundManeuverStep.BACK_STRAIGHT;
         this.maneuverReverseDistance = 0.0D;
         double longitudinalSpeed = this.longitudinalSpeed();
         boolean changingDirection = initialStep == GroundManeuverStep.BACK_STRAIGHT
                 ? longitudinalSpeed > 0.01D : longitudinalSpeed < -0.01D;
-        this.maneuverStep = this.controller.entity().horizontalCollision
+        this.maneuverStep = horizontalCollision
                 || (changingDirection && this.controller.velocity().horizontalDistanceSqr() > 0.0225D)
                 ? GroundManeuverStep.BRAKE : initialStep;
         VehicleAiLogger.debug(this.mob,
@@ -1025,7 +1025,7 @@ final class GroundDriveControl {
             return;
         }
         if (input.forward() && this.maneuverStepTicks >= MANEUVER_STEP_MIN_TICKS
-                && this.controller.entity().horizontalCollision
+                && this.controller.hasHorizontalCollision()
                 && this.controller.velocity().horizontalDistanceSqr() < 0.003D
                 && !this.maneuverClearance.backBlocked(MANEUVER_BLOCKED_DISTANCE)) {
             this.changeManeuverStep(GroundManeuverStep.BACK_STRAIGHT, "forward collision");
@@ -1122,7 +1122,7 @@ final class GroundDriveControl {
     }
 
     private boolean canResumePath(DriveRequest request, Vec3 target) {
-        if (this.longitudinalSpeed() < 0.1D || this.controller.entity().horizontalCollision) {
+        if (this.longitudinalSpeed() < 0.1D || this.controller.hasHorizontalCollision()) {
             return false;
         }
         Vec3 waypoint;

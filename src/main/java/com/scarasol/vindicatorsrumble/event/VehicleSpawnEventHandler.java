@@ -5,6 +5,8 @@ import com.scarasol.vindicatorsrumble.api.vehicle.SeatHandle;
 import com.scarasol.vindicatorsrumble.api.vehicle.VehicleController;
 import com.scarasol.vindicatorsrumble.api.vehicle.VehicleMovementType;
 import com.scarasol.vindicatorsrumble.compat.VehicleControllers;
+import com.scarasol.vindicatorsrumble.compat.VehicleSpawnCandidates;
+import com.scarasol.vindicatorsrumble.compat.VehicleSpawnCandidates.Candidate;
 import com.scarasol.vindicatorsrumble.config.CommonConfig;
 import com.scarasol.vindicatorsrumble.init.ModTags;
 import com.scarasol.vindicatorsrumble.util.VehicleAiLogger;
@@ -162,19 +164,19 @@ public class VehicleSpawnEventHandler {
             return Optional.empty();
         }
 
-        Optional<EntityType<?>> type = chooseVehicleType(level.random, configuredTypes);
+        Optional<Candidate> type = chooseVehicleType(level.random, configuredTypes);
         if (type.isEmpty()) {
-            VehicleAiLogger.debug(owner, "Vehicle spawn skipped: no configured vehicle entity type is registered");
+            VehicleAiLogger.debug(owner, "Vehicle spawn skipped: no configured vehicle is available");
             return Optional.empty();
         }
 
         return spawnVehicleNear(level, owner, type.get());
     }
 
-    private static Optional<EntityType<?>> chooseVehicleType(RandomSource random, List<? extends String> configuredTypes) {
-        List<WeightedRandom.Entry<EntityType<?>>> validTypes = new ArrayList<>();
+    private static Optional<Candidate> chooseVehicleType(RandomSource random, List<? extends String> configuredTypes) {
+        List<WeightedRandom.Entry<Candidate>> validTypes = new ArrayList<>();
         for (String configuredType : configuredTypes) {
-            Optional<WeightedRandom.Entry<EntityType<?>>> entry = parseVehicleType(configuredType);
+            Optional<WeightedRandom.Entry<Candidate>> entry = parseVehicleType(configuredType);
             if (entry.isPresent()) {
                 validTypes.add(entry.get());
             }
@@ -182,7 +184,7 @@ public class VehicleSpawnEventHandler {
         return WeightedRandom.pick(random, validTypes);
     }
 
-    private static Optional<WeightedRandom.Entry<EntityType<?>>> parseVehicleType(String configuredType) {
+    private static Optional<WeightedRandom.Entry<Candidate>> parseVehicleType(String configuredType) {
         String[] parts = configuredType.trim().split(",");
         if (parts.length == 0) {
             return Optional.empty();
@@ -192,8 +194,8 @@ public class VehicleSpawnEventHandler {
         if (id == null) {
             return Optional.empty();
         }
-        EntityType<?> type = ForgeRegistries.ENTITY_TYPES.getValue(id);
-        if (type == null) {
+        Optional<Candidate> type = VehicleSpawnCandidates.resolve(id);
+        if (type.isEmpty()) {
             return Optional.empty();
         }
 
@@ -208,13 +210,13 @@ public class VehicleSpawnEventHandler {
                 return Optional.empty();
             }
         }
-        return Optional.of(WeightedRandom.entry(type, weight));
+        return Optional.of(WeightedRandom.entry(type.get(), weight));
     }
 
-    private static Optional<Entity> spawnVehicleNear(ServerLevel level, LivingEntity owner, EntityType<?> vehicleType) {
-        Entity vehicle = vehicleType.create(level);
+    private static Optional<Entity> spawnVehicleNear(ServerLevel level, LivingEntity owner, Candidate vehicleType) {
+        Entity vehicle = vehicleType.create(level, owner.position());
         if (vehicle == null) {
-            VehicleAiLogger.debug(owner, "Vehicle spawn skipped: failed to create {}", ForgeRegistries.ENTITY_TYPES.getKey(vehicleType));
+            VehicleAiLogger.debug(owner, "Vehicle spawn skipped: failed to create {}", vehicleType.id());
             return Optional.empty();
         }
         Optional<VehicleController> optionalController = VehicleControllers.create(vehicle);
@@ -267,18 +269,25 @@ public class VehicleSpawnEventHandler {
             }
             if (added) {
                 VehicleAiLogger.debug(owner, "Spawned vehicle {} near generated mob vehicle={} position={} airborneHover={}",
-                        ForgeRegistries.ENTITY_TYPES.getKey(vehicleType), vehicle.getId(), vehicle.position(), airborneHover);
+                         vehicleType.id(), vehicle.getId(), vehicle.position(), airborneHover);
                 return Optional.of(vehicle);
             }
             return Optional.empty();
         }
 
-        VehicleAiLogger.debug(owner, "Vehicle spawn skipped: no collision-free nearby position for {}", ForgeRegistries.ENTITY_TYPES.getKey(vehicleType));
+        VehicleAiLogger.debug(owner, "Vehicle spawn skipped: no collision-free nearby position for {}", vehicleType.id());
         return Optional.empty();
     }
 
     private static void boardGeneratedVehicle(ServerLevel level, LivingEntity owner, Entity vehicle) {
         if (!(owner instanceof Mob ownerMob)) {
+            return;
+        }
+        if (VehicleSpawnCandidates.deferBoarding(vehicle, () -> {
+            if (!vehicle.isRemoved() && ownerMob.isAlive() && ownerMob.level() == level && !ownerMob.isPassenger()) {
+                boardGeneratedVehicle(level, ownerMob, vehicle);
+            }
+        })) {
             return;
         }
 
