@@ -1,0 +1,25 @@
+// Isolate vehicle generation contracts from unrelated movement and profiling tests.
+gradle.beforeProject { project ->
+    project.configurations.configureEach {
+        if (name.toLowerCase(java.util.Locale.ROOT).contains('runtime')) {
+            exclude group: 'curse.maven', module: 'sona-survival-101-1023345'
+            exclude group: 'curse.maven', module: 'zombie-survival-kit-839371'
+        }
+    }
+    project.afterEvaluate {
+        project.sourceSets.gameTest.java {
+            setSrcDirs(['src/gametest/java'])
+            include 'com/scarasol/vindicatorsrumble/gametest/VehicleSpawnGameTests.java'
+            include 'com/scarasol/vindicatorsrumble/compat/sbw/SbwGameTestVehicle.java'
+        }
+        project.tasks.named('compileGameTestJava').configure {
+            destinationDirectory = project.layout.buildDirectory.dir('vehicle-spawn-pools/classes')
+        }
+        project.sourceSets.gameTest.output.classesDirs.setFrom(
+                project.layout.buildDirectory.dir('vehicle-spawn-pools/classes'))
+        project.minecraft.runs.gameTestServer {
+            property 'forge.enabledGameTestNamespaces', 'vindicators_rumble'
+            property 'forge.logging.console.level', 'info'
+        }
+    }
+}

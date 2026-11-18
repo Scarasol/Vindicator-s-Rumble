@@ -76,7 +76,8 @@ public class CommonConfig {
         VINDICATOR_RAID_MIN_WAVE = BUILDER.comment("First raid wave whose tagged members may spawn vehicles. Waves start at 1; Bad Omen and vehicle chance requirements still apply.")
                 .defineInRange("Vindicator Raid Minimum Wave", 2, 1, Integer.MAX_VALUE);
         VINDICATOR_RAID_VEHICLE_TYPES = BUILDER.comment("""
-                Vehicle entity type IDs and their weights for eligible tagged raid members, patrol members, and ordinary spawns of vehicle_ai_users.
+                Vehicle entity type IDs and their weights for generated vehicles owned by mobs implementing Minecraft's Enemy interface.
+                Used by every generation rule, including raids, patrols, and ordinary spawns. Non-Enemy mobs use Village Defender Vehicle Types.
                 Format: "superbwarfare:sodayo_pick_up_hmg, 5" means this vehicle has a spawn weight of 5.
                 """).defineList("Vindicator Raid Vehicle Types", List.of(
                         "superbwarfare:sodayo_pick_up_hmg, 9",
@@ -85,20 +86,22 @@ public class CommonConfig {
         VILLAGE_DEFENDER_VEHICLE_CHANCE = BUILDER.comment("Chance for Guard Villagers or Recruits generated near villages to spawn a nearby vehicle.")
                 .defineInRange("Village Defender Vehicle Chance", 0.0D, 0.0D, 1.0D);
         VILLAGE_DEFENDER_VEHICLE_TYPES = BUILDER.comment("""
-                Vehicle entity type IDs and their weights for Guard Villagers or Recruits generated near villages.
+                Vehicle entity type IDs and their weights for generated vehicles owned by mobs not implementing Minecraft's Enemy interface.
+                Used by every generation rule, including ordinary spawns of Guard Villagers, Recruits, and other tagged non-Enemy mobs.
                 Format: "superbwarfare:sodayo_pick_up_hmg, 5" means this vehicle has a spawn weight of 5.
                 """).defineList("Village Defender Vehicle Types", List.of(
                         "superbwarfare:sodayo_pick_up_hmg, 9",
                         "superbwarfare:sodayo_pick_up_tow, 1"
                 ), CommonConfig::isWeightedResourceLocation);
         PATROL_VEHICLE_CHANCE = BUILDER.comment("""
-                Chance per newly spawned illager patrol member to generate a vehicle. Uses Vindicator Raid Vehicle Types; raid members are excluded.
+                Chance per newly spawned illager patrol member to generate a vehicle; raid members are excluded. Vehicle pool is selected by the Enemy interface.
                 Patrol pillagers outside vehicle_ai_users are replaced with tagged Vindicators only when a vehicle is generated.
                 """)
                 .defineInRange("Patrol Vehicle Chance", 0.02D, 0.0D, 1.0D);
         NATURAL_VEHICLE_CHANCE = BUILDER.comment("""
                 Chance per newly generated mob in vindicators_rumble:vehicle_ai_users to generate a nearby vehicle.
-                Includes eggs and commands, but not saved entities loaded from disk. Uses Vindicator Raid Vehicle Types.
+                Includes eggs and commands, but not saved entities loaded from disk.
+                Uses Vindicator Raid Vehicle Types for Enemy mobs, and Village Defender Vehicle Types for non-Enemy mobs.
                 Raid, patrol, and village defender rules take priority; those entities do not roll again against this chance.
                 """)
                 .defineInRange("Natural Vehicle Chance", 0.0D, 0.0D, 1.0D);

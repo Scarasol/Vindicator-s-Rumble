@@ -225,7 +225,7 @@ dependencies {
 //    implementation fg.deobf("curse.maven:timeless-and-classics-zero-1028108:6654543")
     implementation fg.deobf("curse.maven:kotlin-for-forge-351264:7291067")
     implementation fg.deobf("curse.maven:superb-warfare-1218165:9019882-sources-9019889")
-
+    implementation fg.deobf("curse.maven:limitless-vehicle-1446269:9552162")
     implementation fg.deobf("curse.maven:tacz-lesraisins-tactical-equipements-1273094:8087337")
     implementation fg.deobf("curse.maven:curios-309927:6418456")
 //    implementation fg.deobf("curse.maven:geck

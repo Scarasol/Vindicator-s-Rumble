@@ -20,6 +20,7 @@ import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.MobSpawnType;
+import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.entity.monster.PatrollingMonster;
 import net.minecraft.world.entity.raid.Raid;
 import net.minecraft.world.entity.raid.Raider;
@@ -68,7 +69,7 @@ public class VehicleSpawnEventHandler {
 
         if (entity instanceof Raider raider && raider.getCurrentRaid() != null) {
             if (isEligibleRaidMember(raider)) {
-                trySpawnConfiguredVehicle(level, entity, CommonConfig.VINDICATOR_RAID_VEHICLE_CHANCE.get(), CommonConfig.VINDICATOR_RAID_VEHICLE_TYPES.get());
+                trySpawnConfiguredVehicle(level, entity, CommonConfig.VINDICATOR_RAID_VEHICLE_CHANCE.get());
             }
             return;
         }
@@ -79,12 +80,12 @@ public class VehicleSpawnEventHandler {
         }
 
         if (isVillageDefender(entity) && level.isCloseToVillage(entity.blockPosition(), VILLAGE_SEARCH_SECTIONS)) {
-            trySpawnConfiguredVehicle(level, entity, CommonConfig.VILLAGE_DEFENDER_VEHICLE_CHANCE.get(), CommonConfig.VILLAGE_DEFENDER_VEHICLE_TYPES.get());
+            trySpawnConfiguredVehicle(level, entity, CommonConfig.VILLAGE_DEFENDER_VEHICLE_CHANCE.get());
             return;
         }
 
         if (entity.getType().is(ModTags.EntityTypes.VEHICLE_AI_USERS)) {
-            trySpawnConfiguredVehicle(level, entity, CommonConfig.NATURAL_VEHICLE_CHANCE.get(), CommonConfig.VINDICATOR_RAID_VEHICLE_TYPES.get());
+            trySpawnConfiguredVehicle(level, entity, CommonConfig.NATURAL_VEHICLE_CHANCE.get());
         }
     }
 
@@ -103,20 +104,20 @@ public class VehicleSpawnEventHandler {
         return GUARD_VILLAGER.equals(key) || key != null && RECRUITS_NAMESPACE.equals(key.getNamespace());
     }
 
-    private static void trySpawnConfiguredVehicle(ServerLevel level, LivingEntity owner, double chance, List<? extends String> configuredTypes) {
-        createConfiguredVehicle(level, owner, chance, configuredTypes)
+    private static void trySpawnConfiguredVehicle(ServerLevel level, LivingEntity owner, double chance) {
+        createConfiguredVehicle(level, owner, chance)
                 .ifPresent(vehicle -> boardGeneratedVehicle(level, owner, vehicle));
     }
 
     private static void onPatrolSpawn(EntityJoinLevelEvent event, ServerLevel level, PatrollingMonster patrol) {
         if (patrol.getType().is(ModTags.EntityTypes.VEHICLE_AI_USERS)) {
-            trySpawnConfiguredVehicle(level, patrol, CommonConfig.PATROL_VEHICLE_CHANCE.get(), CommonConfig.VINDICATOR_RAID_VEHICLE_TYPES.get());
+            trySpawnConfiguredVehicle(level, patrol, CommonConfig.PATROL_VEHICLE_CHANCE.get());
             return;
         }
         if (patrol.getType() != EntityType.PILLAGER || !EntityType.VINDICATOR.is(ModTags.EntityTypes.VEHICLE_AI_USERS)) {
             return;
         }
-        Optional<Entity> vehicle = createConfiguredVehicle(level, patrol, CommonConfig.PATROL_VEHICLE_CHANCE.get(), CommonConfig.VINDICATOR_RAID_VEHICLE_TYPES.get());
+        Optional<Entity> vehicle = createConfiguredVehicle(level, patrol, CommonConfig.PATROL_VEHICLE_CHANCE.get());
         if (vehicle.isEmpty()) {
             return;
         }
@@ -153,7 +154,10 @@ public class VehicleSpawnEventHandler {
         boardGeneratedVehicle(level, driver, vehicle.get());
     }
 
-    private static Optional<Entity> createConfiguredVehicle(ServerLevel level, LivingEntity owner, double chance, List<? extends String> configuredTypes) {
+    private static Optional<Entity> createConfiguredVehicle(ServerLevel level, LivingEntity owner, double chance) {
+        List<? extends String> configuredTypes = owner instanceof Enemy
+                ? CommonConfig.VINDICATOR_RAID_VEHICLE_TYPES.get()
+                : CommonConfig.VILLAGE_DEFENDER_VEHICLE_TYPES.get();
         if (chance <= 0.0D || configuredTypes.isEmpty() || level.random.nextDouble() >= chance) {
             return Optional.empty();
         }

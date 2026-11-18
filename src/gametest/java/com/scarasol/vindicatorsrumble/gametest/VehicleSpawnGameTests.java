@@ -268,6 +268,126 @@ public final class VehicleSpawnGameTests {
     }
 
     @GameTest(batch = "vehicle_spawning", template = "empty", timeoutTicks = 40)
+    public static void naturalDefendersUseTheirOwnVehiclePool(GameTestHelper helper) {
+        try (Fixture fixture = new Fixture(helper)) {
+            helper.assertTrue(!fixture.level.isCloseToVillage(fixture.origin, 2),
+                    "Pool selection fixture must be outside a village");
+            CommonConfig.NATURAL_VEHICLE_CHANCE.set(1.0D);
+            CommonConfig.VILLAGE_DEFENDER_VEHICLE_CHANCE.set(0.0D);
+            CommonConfig.GENERATED_VEHICLE_EXTRA_PASSENGER_CHANCE.set(0.0D);
+            String defenderVehicle = "superbwarfare:sodayo_pick_up_tow";
+            CommonConfig.VILLAGE_DEFENDER_VEHICLE_TYPES.set(List.of(defenderVehicle));
+
+            for (MobSpawnType reason : List.of(MobSpawnType.NATURAL, MobSpawnType.SPAWN_EGG, MobSpawnType.COMMAND)) {
+                for (String id : List.of("guardvillagers:guard", "recruits:recruit")) {
+                    Mob defender = fixture.spawn(new ResourceLocation(id), reason);
+                    fixture.expectMounted(defender, defenderVehicle);
+                    fixture.expectVehicles(1, "Natural defenders must generate exactly one vehicle from their own pool");
+                    fixture.clearEntities();
+                }
+                fixture.expectMounted(fixture.spawn(EntityType.VINDICATOR, reason), TRUCK);
+                fixture.expectVehicles(1, "Ordinary Vindicators must keep using the raid vehicle pool");
+                fixture.clearEntities();
+            }
+
+            for (String id : List.of("guardvillagers:guard", "recruits:recruit")) {
+                EntityType<?> type = ForgeRegistries.ENTITY_TYPES.getValue(new ResourceLocation(id));
+                helper.assertTrue(type != null, "Missing defender fixture " + id);
+                fixture.vehicleAiUser(type, false);
+                fixture.spawn(new ResourceLocation(id), MobSpawnType.NATURAL);
+                fixture.expectVehicles(0, "An untagged natural defender must not generate a vehicle");
+                fixture.clearEntities();
+            }
+        }
+        helper.succeed();
+    }
+
+    @GameTest(batch = "vehicle_spawning", template = "empty", timeoutTicks = 40)
+    public static void emptyNaturalDefenderPoolDoesNotFallBackToRaidVehicles(GameTestHelper helper) {
+        try (Fixture fixture = new Fixture(helper)) {
+            helper.assertTrue(!fixture.level.isCloseToVillage(fixture.origin, 2),
+                    "Empty defender pool fixture must be outside a village");
+            CommonConfig.NATURAL_VEHICLE_CHANCE.set(1.0D);
+            CommonConfig.VILLAGE_DEFENDER_VEHICLE_TYPES.set(List.of());
+            for (String id : List.of("guardvillagers:guard", "recruits:recruit")) {
+                fixture.spawn(new ResourceLocation(id), MobSpawnType.NATURAL);
+                fixture.expectVehicles(0, "An empty defender pool must not fall back to the populated raid pool");
+                fixture.clearEntities();
+            }
+            fixture.expectMounted(fixture.spawn(EntityType.VINDICATOR, MobSpawnType.NATURAL), TRUCK);
+        }
+        helper.succeed();
+    }
+
+    @GameTest(batch = "vehicle_spawning", template = "empty", timeoutTicks = 40)
+    public static void naturalDefenderVehiclesDoNotDependOnTheRaidPool(GameTestHelper helper) {
+        try (Fixture fixture = new Fixture(helper)) {
+            helper.assertTrue(!fixture.level.isCloseToVillage(fixture.origin, 2),
+                    "Independent defender pool fixture must be outside a village");
+            CommonConfig.NATURAL_VEHICLE_CHANCE.set(1.0D);
+            CommonConfig.VINDICATOR_RAID_VEHICLE_TYPES.set(List.of());
+            CommonConfig.VILLAGE_DEFENDER_VEHICLE_TYPES.set(List.of(TRUCK));
+            for (String id : List.of("guardvillagers:guard", "recruits:recruit")) {
+                fixture.expectMounted(fixture.spawn(new ResourceLocation(id), MobSpawnType.NATURAL), TRUCK);
+                fixture.expectVehicles(1, "A populated defender pool must work when the raid pool is empty");
+                fixture.clearEntities();
+            }
+            fixture.spawn(EntityType.VINDICATOR, MobSpawnType.NATURAL);
+            fixture.expectVehicles(0, "An empty raid pool must not fall back to the defender pool");
+        }
+        helper.succeed();
+    }
+
+    @GameTest(batch = "vehicle_spawning", template = "empty", timeoutTicks = 40)
+    public static void otherTaggedMobsUseEnemyAndNonEnemyVehiclePools(GameTestHelper helper) {
+        try (Fixture fixture = new Fixture(helper)) {
+            helper.assertTrue(!fixture.level.isCloseToVillage(fixture.origin, 2),
+                    "Generic pool selection fixture must be outside a village");
+            CommonConfig.NATURAL_VEHICLE_CHANCE.set(1.0D);
+            String defenderVehicle = "superbwarfare:sodayo_pick_up_tow";
+            CommonConfig.VILLAGE_DEFENDER_VEHICLE_TYPES.set(List.of(defenderVehicle));
+            for (EntityType<? extends Mob> type : List.of(EntityType.VILLAGER, EntityType.COW, EntityType.WOLF, EntityType.IRON_GOLEM)) {
+                fixture.vehicleAiUser(type, true);
+                fixture.expectMounted(fixture.spawn(type, MobSpawnType.NATURAL), defenderVehicle);
+                fixture.expectVehicles(1, "Every tagged non-Enemy mob must use the defender vehicle pool");
+                fixture.clearEntities();
+            }
+            for (EntityType<? extends Mob> type : List.of(EntityType.ZOMBIE, EntityType.CREEPER, EntityType.PIGLIN)) {
+                fixture.vehicleAiUser(type, true);
+                fixture.expectMounted(fixture.spawn(type, MobSpawnType.NATURAL), TRUCK);
+                fixture.expectVehicles(1, "Every tagged Enemy mob must use the raid vehicle pool");
+                fixture.clearEntities();
+            }
+        }
+        helper.succeed();
+    }
+
+    @GameTest(batch = "vehicle_spawning", template = "empty", timeoutTicks = 40)
+    public static void enemyAndNonEnemyVehiclePoolsNeverFallBackToEachOther(GameTestHelper helper) {
+        try (Fixture fixture = new Fixture(helper)) {
+            CommonConfig.NATURAL_VEHICLE_CHANCE.set(1.0D);
+            fixture.vehicleAiUser(EntityType.COW, true);
+            fixture.vehicleAiUser(EntityType.ZOMBIE, true);
+
+            CommonConfig.VILLAGE_DEFENDER_VEHICLE_TYPES.set(List.of());
+            fixture.spawn(EntityType.COW, MobSpawnType.NATURAL);
+            fixture.expectVehicles(0, "An empty non-Enemy pool must not fall back to Enemy vehicles");
+            fixture.clearEntities();
+            fixture.expectMounted(fixture.spawn(EntityType.ZOMBIE, MobSpawnType.NATURAL), TRUCK);
+            fixture.clearEntities();
+
+            CommonConfig.VINDICATOR_RAID_VEHICLE_TYPES.set(List.of());
+            CommonConfig.VILLAGE_DEFENDER_VEHICLE_TYPES.set(List.of(TRUCK));
+            fixture.spawn(EntityType.ZOMBIE, MobSpawnType.NATURAL);
+            fixture.expectVehicles(0, "An empty Enemy pool must not fall back to non-Enemy vehicles");
+            fixture.clearEntities();
+            fixture.expectMounted(fixture.spawn(EntityType.COW, MobSpawnType.NATURAL), TRUCK);
+            fixture.expectVehicles(1, "Non-Enemy generation must be independent of the Enemy pool");
+        }
+        helper.succeed();
+    }
+
+    @GameTest(batch = "vehicle_spawning", template = "empty", timeoutTicks = 40)
     public static void raidVehicleMinimumWaveContract(GameTestHelper helper) {
         helper.assertTrue(CommonConfig.VINDICATOR_RAID_MIN_WAVE.getDefault() == 2,
                 "Raid vehicles must become eligible starting with the second wave by default");
@@ -653,10 +773,12 @@ public final class VehicleSpawnGameTests {
         private final double patrolChance = CommonConfig.PATROL_VEHICLE_CHANCE.get();
         private final double naturalChance = CommonConfig.NATURAL_VEHICLE_CHANCE.get();
         private final double raidChance = CommonConfig.VINDICATOR_RAID_VEHICLE_CHANCE.get();
+        private final double defenderChance = CommonConfig.VILLAGE_DEFENDER_VEHICLE_CHANCE.get();
         private final int omenLevel = CommonConfig.VINDICATOR_RAID_MIN_BAD_OMEN_LEVEL.get();
         private final int minimumWave = CommonConfig.VINDICATOR_RAID_MIN_WAVE.get();
         private final double extraChance = CommonConfig.GENERATED_VEHICLE_EXTRA_PASSENGER_CHANCE.get();
         private final List<? extends String> vehicleTypes = CommonConfig.VINDICATOR_RAID_VEHICLE_TYPES.get();
+        private final List<? extends String> defenderVehicleTypes = CommonConfig.VILLAGE_DEFENDER_VEHICLE_TYPES.get();
         private boolean closed;
 
         private Fixture(GameTestHelper helper) {
@@ -677,8 +799,21 @@ public final class VehicleSpawnGameTests {
         private <T extends Mob> T create(EntityType<T> type, MobSpawnType reason) {
             T mob = type.create(level);
             helper.assertTrue(mob != null, "Missing mob fixture " + type);
+            return prepare(mob, reason);
+        }
+
+        private <T extends Mob> T prepare(T mob, MobSpawnType reason) {
             mob.moveTo(origin.getX() + 0.5D, origin.getY(), origin.getZ() + 0.5D, 0.0F, 0.0F);
             ForgeEventFactory.onFinalizeSpawn(mob, level, level.getCurrentDifficultyAt(origin), reason, null, null);
+            return mob;
+        }
+
+        private Mob spawn(ResourceLocation id, MobSpawnType reason) {
+            EntityType<?> type = ForgeRegistries.ENTITY_TYPES.getValue(id);
+            Entity entity = type == null ? null : type.create(level);
+            helper.assertTrue(entity instanceof Mob, "Missing mob fixture " + id);
+            Mob mob = prepare((Mob) entity, reason);
+            helper.assertTrue(level.addFreshEntity(mob), "Could not add mob fixture " + id);
             return mob;
         }
 
@@ -774,10 +909,12 @@ public final class VehicleSpawnGameTests {
             CommonConfig.PATROL_VEHICLE_CHANCE.set(patrolChance);
             CommonConfig.NATURAL_VEHICLE_CHANCE.set(naturalChance);
             CommonConfig.VINDICATOR_RAID_VEHICLE_CHANCE.set(raidChance);
+            CommonConfig.VILLAGE_DEFENDER_VEHICLE_CHANCE.set(defenderChance);
             CommonConfig.VINDICATOR_RAID_MIN_BAD_OMEN_LEVEL.set(omenLevel);
             CommonConfig.VINDICATOR_RAID_MIN_WAVE.set(minimumWave);
             CommonConfig.GENERATED_VEHICLE_EXTRA_PASSENGER_CHANCE.set(extraChance);
             CommonConfig.VINDICATOR_RAID_VEHICLE_TYPES.set(vehicleTypes);
+            CommonConfig.VILLAGE_DEFENDER_VEHICLE_TYPES.set(defenderVehicleTypes);
         }
     }
 }
